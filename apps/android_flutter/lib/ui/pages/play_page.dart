@@ -31,6 +31,8 @@ class PlayPage extends StatelessWidget {
     required this.effectiveCodec,
     required this.sampleRate,
     required this.channels,
+    this.lossPercent,
+    this.isBluetoothOutput = false,
   });
 
   final bool isZh;
@@ -67,6 +69,12 @@ class PlayPage extends StatelessWidget {
 
   /// Negotiated channel count. Reads `_channels` from `MainShell`.
   final int channels;
+
+  /// Estimated packet loss percentage (0–100). `null` when not streaming.
+  final double? lossPercent;
+
+  /// Whether the device is currently outputting audio via Bluetooth.
+  final bool isBluetoothOutput;
 
   String tr(String zh, String en) => isZh ? zh : en;
 
@@ -173,10 +181,24 @@ class PlayPage extends StatelessWidget {
           Text(
             '${tr('缓冲', 'Buf')} ${metricBufferText}ms · '
             '${tr('欠载', 'Underrun')} $metricUnderrunText · '
-            'RTT ${tcpRoundTripMs ?? '-'}ms',
+            'RTT ${tcpRoundTripMs ?? '-'}ms · '
+            '${tr('丢包', 'Loss')} ${lossPercent != null ? '${lossPercent!.toStringAsFixed(1)}%' : '-'}',
             style: AudioConsoleType.monoMeta(),
             textAlign: TextAlign.center,
           ),
+          // Bluetooth latency warning
+          if (isBluetoothOutput)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                tr('蓝牙输出会增加额外延迟', 'Bluetooth output adds extra latency'),
+                style: AudioConsoleType.monoMeta().copyWith(
+                  color: const Color(0xFFF59E0B),
+                  fontSize: 11,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
           const SizedBox(height: 14),
           // Latency comparison chart (Phase 2 visualization)
           LatencyChartWidget(

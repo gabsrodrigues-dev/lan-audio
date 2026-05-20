@@ -511,6 +511,7 @@
             <span class="legend-item"><span class="legend-dash"></span><span class="legend-text" id="latencyLegendBefore">基线</span></span>
           </div>
           <span class="latency-value" id="latencyValue">--</span>
+          <span class="latency-value" id="lossValue" style="font-size:11px;color:var(--muted);margin-left:10px;display:none;"></span>
         </div>
         <canvas id="latencyCanvas" width="440" height="70"></canvas>
       </div>
@@ -691,6 +692,7 @@
           bufferedMs: '缓冲ms',
           latePackets: '迟到',
           droppedPackets: '丢弃',
+          lossLabel: '丢包',
           rttMs: 'RTT',
           reconnectCount: '重连',
           decodeErrors: '解码错',
@@ -803,6 +805,7 @@
           bufferedMs: 'Buf ms',
           latePackets: 'Late',
           droppedPackets: 'Drop',
+          lossLabel: 'Loss',
           rttMs: 'RTT',
           reconnectCount: 'Reconn',
           decodeErrors: 'Decode err',
@@ -1253,6 +1256,23 @@
         // Latency chart only when service is running (avoids empty chart in idle UI)
         const latencyCard = document.getElementById('latencyCard');
         latencyCard.classList.toggle('is-hidden', snapshot.service_status !== 'running');
+
+        // Loss indicator next to latency value
+        const lossEl = document.getElementById('lossValue');
+        if (lossEl) {
+          const dropped = runtimeMetrics.dropped_packets ?? 0;
+          const late = runtimeMetrics.late_packets ?? 0;
+          const totalLoss = dropped + late;
+          if (snapshot.service_status === 'running' && totalLoss > 0) {
+            lossEl.textContent = `${t('lossLabel')}: ${totalLoss}`;
+            lossEl.style.display = 'inline';
+          } else if (snapshot.service_status === 'running') {
+            lossEl.textContent = `${t('lossLabel')}: 0%`;
+            lossEl.style.display = 'inline';
+          } else {
+            lossEl.style.display = 'none';
+          }
+        }
 
         // Disable controls during busy
         const disabled = state.busy;

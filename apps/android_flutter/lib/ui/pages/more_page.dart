@@ -85,6 +85,8 @@ class MorePage extends StatelessWidget {
     required this.uiUdpLoss,
     required this.uiLastSeq,
     required this.wsLog,
+    required this.autoConnectEnabled,
+    required this.onAutoConnectChanged,
   });
 
   final bool isZh;
@@ -165,6 +167,9 @@ class MorePage extends StatelessWidget {
   final int uiUdpLoss;
   final int? uiLastSeq;
   final String wsLog;
+  // Auto-connect preference
+  final bool autoConnectEnabled;
+  final ValueChanged<bool> onAutoConnectChanged;
 
   String tr(String zh, String en) => isZh ? zh : en;
 
@@ -514,6 +519,12 @@ class MorePage extends StatelessWidget {
         _sectionCard(
           title: tr('应用', 'App'),
           children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr('自动连接上次服务器', 'Auto-connect to last server')),
+              value: autoConnectEnabled,
+              onChanged: onAutoConnectChanged,
+            ),
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(tr('后台播放', 'Background Playback')),

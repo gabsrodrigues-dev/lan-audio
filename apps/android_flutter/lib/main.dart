@@ -274,6 +274,9 @@ class _MainShellState extends State<MainShell> {
   bool _nsdDiscoveryRunning = false;
   bool _discoveryTimedOut = false;
   List<ConnectHistoryEntry> _connectHistory = const <ConnectHistoryEntry>[];
+  bool _autoConnectEnabled = true;
+  bool _autoConnectTriggered = false;
+  bool _isBluetoothOutput = false;
 
   @override
   void initState() {
@@ -285,6 +288,7 @@ class _MainShellState extends State<MainShell> {
     _platformChannel.setMethodCallHandler(_handlePlatformCall);
     _acquireMulticastLock();
     _loadConnectHistory();
+    _loadAutoConnectPreference();
     _startDiscovery();
     if (kUseBackgroundPlaybackService) {
       debugPrint(
@@ -621,6 +625,52 @@ class _MainShellState extends State<MainShell> {
     _selectedServerId = _servers.keys.first;
   }
 
+  /// Auto-connect to the most recently used server if it appears in the
+  /// discovery list, the user is not already connected, and the preference
+  /// is enabled. Fires once per app launch after a 2-second delay.
+  void _maybeAutoConnect() {
+    if (!_autoConnectEnabled || _autoConnectTriggered || _wsConnected || _isConnecting) {
+      return;
+    }
+    final recentHost = _mostRecentHost();
+    if (recentHost == null) return;
+    // Check if the recent host is in the discovered servers.
+    final match = _servers.values.where((s) => s.host == recentHost).toList();
+    if (match.isEmpty) return;
+    _autoConnectTriggered = true;
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted || _wsConnected || _isConnecting) return;
+      _selectedServerId = match.first.serverId;
+      _connectSelected();
+    });
+  }
+
+  Future<void> _loadAutoConnectPreference() async {
+    try {
+      final value = await _platformChannel
+              .invokeMethod<bool>('getAutoConnectEnabled') ??
+          true;
+      if (mounted) {
+        setState(() {
+          _autoConnectEnabled = value;
+        });
+      }
+    } catch (_) {
+      // Platform support is optional; default to enabled.
+    }
+  }
+
+  Future<void> _setAutoConnectEnabled(bool enabled) async {
+    setState(() {
+      _autoConnectEnabled = enabled;
+    });
+    try {
+      await _platformChannel.invokeMethod('setAutoConnectEnabled', {
+        'enabled': enabled,
+      });
+    } catch (_) {}
+  }
+
   Future<void> _maybeShowFirstUseHint() async {
     if (!mounted || _firstUseHintShown) {
       return;
@@ -726,6 +776,7 @@ class _MainShellState extends State<MainShell> {
           _status = tr('已发现附近设备', 'Nearby device discovered');
           _maybeSelectRecentOrFirst();
         });
+        _maybeAutoConnect();
       }
     } catch (_) {}
   }
@@ -880,6 +931,7 @@ class _MainShellState extends State<MainShell> {
           }
           _maybeSelectRecentOrFirst();
         });
+        _maybeAutoConnect();
       });
       _startProbeLoop();
     } catch (e) {
@@ -981,6 +1033,7 @@ class _MainShellState extends State<MainShell> {
             _status = tr('已通过扫描发现服务器', 'server discovered via probe');
             _maybeSelectRecentOrFirst();
           });
+          _maybeAutoConnect();
         } catch (_) {
           // ignore connect timeout/refused
         } finally {
@@ -1679,6 +1732,14 @@ class _MainShellState extends State<MainShell> {
 
   int get _uiUdpLoss => kUseBackgroundPlaybackService ? _serviceLoss : _udpLoss;
 
+  double? get _lossPercent {
+    if (!_wsConnected) return null;
+    final packets = _uiUdpPackets;
+    if (packets <= 0) return null;
+    final loss = _uiUdpLoss;
+    return (loss / packets) * 100.0;
+  }
+
   int? get _uiLastSeq =>
       kUseBackgroundPlaybackService ? _serviceLastSeq : _lastSeq;
 
@@ -1885,6 +1946,8 @@ class _MainShellState extends State<MainShell> {
       effectiveCodec: _effectiveCodec,
       sampleRate: _sampleRate,
       channels: _channels,
+      lossPercent: _lossPercent,
+      isBluetoothOutput: _isBluetoothOutput,
     );
   }
 
@@ -2013,6 +2076,8 @@ class _MainShellState extends State<MainShell> {
       uiUdpLoss: _uiUdpLoss,
       uiLastSeq: _uiLastSeq,
       wsLog: _wsLog,
+      autoConnectEnabled: _autoConnectEnabled,
+      onAutoConnectChanged: _setAutoConnectEnabled,
     );
   }
 }
