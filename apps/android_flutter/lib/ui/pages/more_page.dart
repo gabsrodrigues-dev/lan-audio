@@ -31,6 +31,9 @@ class MorePage extends StatelessWidget {
     // Codec selector (Phase 7)
     required this.preferredCodec,
     required this.onPreferredCodecChanged,
+    // Buffer settings
+    this.customBufferMs,
+    this.onBufferMsChanged,
     // Equalizer
     required this.eqEnabled,
     required this.eqLowDb,
@@ -51,6 +54,9 @@ class MorePage extends StatelessWidget {
     required this.onOpenPowerSavingGuide,
     required this.onCheckUpdate,
     required this.updateCheckRunning,
+    // Audio Focus
+    this.audioFocusExclusive = false,
+    this.onAudioFocusChanged,
     // Debug
     required this.protocolVersion,
     required this.currentAudioModeLabel,
@@ -112,6 +118,9 @@ class MorePage extends StatelessWidget {
   // Codec selector (Phase 7). `null` means "server default".
   final String? preferredCodec;
   final ValueChanged<String?> onPreferredCodecChanged;
+  // Buffer settings
+  final int? customBufferMs;
+  final ValueChanged<int?>? onBufferMsChanged;
   // Equalizer
   final bool eqEnabled;
   final int eqLowDb;
@@ -133,6 +142,9 @@ class MorePage extends StatelessWidget {
   final VoidCallback onOpenPowerSavingGuide;
   final VoidCallback onCheckUpdate;
   final bool updateCheckRunning;
+  // Audio Focus
+  final bool audioFocusExclusive;
+  final ValueChanged<bool>? onAudioFocusChanged;
   // Debug
   final int? protocolVersion;
   final String currentAudioModeLabel;
@@ -441,6 +453,52 @@ class MorePage extends StatelessWidget {
             ),
           ],
         ),
+        // ─── Section: 缓冲设置 (Buffer Settings) ───
+        _sectionCard(
+          title: tr('缓冲设置', 'Buffer Settings'),
+          children: [
+            Text(
+              tr(
+                '调节缓冲大小。较小的缓冲降低延迟但可能不稳定。',
+                'Adjust buffer size. Smaller buffer reduces latency but may be unstable.',
+              ),
+              style: const TextStyle(fontSize: 12, color: AudioConsoleColors.text2),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Slider(
+                    min: 10,
+                    max: 200,
+                    divisions: 19,
+                    value: (customBufferMs ?? 60).toDouble(),
+                    onChanged: (v) {
+                      onBufferMsChanged?.call(v.round());
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${customBufferMs ?? 60}ms',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+            ),
+            if (customBufferMs != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => onBufferMsChanged?.call(null),
+                  child: Text(tr('重置为默认', 'Reset to default')),
+                ),
+              ),
+          ],
+        ),
         // ─── Section: 均衡器 (Equalizer) ───
         _sectionCard(
           title: tr('均衡器', 'Equalizer'),
@@ -524,6 +582,16 @@ class MorePage extends StatelessWidget {
               title: Text(tr('自动连接上次服务器', 'Auto-connect to last server')),
               value: autoConnectEnabled,
               onChanged: onAutoConnectChanged,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(tr('独占音频焦点', 'Exclusive Audio Focus')),
+              subtitle: Text(
+                tr('开启后其他App播放音频时不会中断', 'When enabled, other apps won\'t interrupt playback'),
+                style: const TextStyle(fontSize: 12),
+              ),
+              value: audioFocusExclusive,
+              onChanged: onAudioFocusChanged,
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,

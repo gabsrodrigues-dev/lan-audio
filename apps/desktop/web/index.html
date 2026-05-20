@@ -1262,13 +1262,20 @@
         if (lossEl) {
           const dropped = runtimeMetrics.dropped_packets ?? 0;
           const late = runtimeMetrics.late_packets ?? 0;
+          const totalPackets = runtimeMetrics.udp_packets ?? runtimeMetrics.total_packets ?? 0;
           const totalLoss = dropped + late;
-          if (snapshot.service_status === 'running' && totalLoss > 0) {
-            lossEl.textContent = `${t('lossLabel')}: ${totalLoss}`;
+          if (snapshot.service_status === 'running') {
+            const lossPct = totalPackets > 0 ? ((totalLoss / totalPackets) * 100) : 0;
+            lossEl.textContent = `${t('lossLabel')} ${lossPct.toFixed(1)}%`;
             lossEl.style.display = 'inline';
-          } else if (snapshot.service_status === 'running') {
-            lossEl.textContent = `${t('lossLabel')}: 0%`;
-            lossEl.style.display = 'inline';
+            // Color coding: green=0%, amber=1-5%, red=>5%
+            if (lossPct <= 0) {
+              lossEl.style.color = 'var(--accent)';
+            } else if (lossPct <= 5) {
+              lossEl.style.color = 'var(--warn)';
+            } else {
+              lossEl.style.color = 'var(--error)';
+            }
           } else {
             lossEl.style.display = 'none';
           }

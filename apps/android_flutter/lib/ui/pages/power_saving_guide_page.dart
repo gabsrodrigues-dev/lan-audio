@@ -37,6 +37,15 @@ class _PowerSavingGuidePageState extends State<PowerSavingGuidePage> {
     }
   }
 
+  Future<void> _openDontKillMyApp() async {
+    try {
+      await _platformChannel.invokeMethod(
+          'openExternalUrl', {'url': 'https://dontkillmyapp.com/'});
+    } catch (_) {
+      // Fallback: silently ignore if platform channel is unavailable.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final locale =
@@ -74,6 +83,21 @@ class _PowerSavingGuidePageState extends State<PowerSavingGuidePage> {
             ),
             const Divider(height: 1),
           ],
+          const SizedBox(height: 16),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.link, color: Colors.blueAccent),
+            title: Text(
+              isZh
+                  ? '查看你的手机品牌的详细设置 →'
+                  : 'See detailed settings for your phone brand →',
+              style: const TextStyle(
+                color: Colors.blueAccent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            onTap: _openDontKillMyApp,
+          ),
         ],
       ),
     );

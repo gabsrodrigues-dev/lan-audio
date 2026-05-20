@@ -33,6 +33,7 @@ class PlayPage extends StatelessWidget {
     required this.channels,
     this.lossPercent,
     this.isBluetoothOutput = false,
+    this.networkQuality = 0,
   });
 
   final bool isZh;
@@ -75,6 +76,9 @@ class PlayPage extends StatelessWidget {
 
   /// Whether the device is currently outputting audio via Bluetooth.
   final bool isBluetoothOutput;
+
+  /// Network quality indicator: 0=bad, 1=ok, 2=good. Computed from RTT and loss.
+  final int networkQuality;
 
   String tr(String zh, String en) => isZh ? zh : en;
 
@@ -139,12 +143,33 @@ class PlayPage extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           // Server name
-          Text(
-            serverName ?? tr('无服务器', 'No server'),
-            style: const TextStyle(
-              fontSize: 13,
-              color: AudioConsoleColors.text2,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                serverName ?? tr('无服务器', 'No server'),
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: AudioConsoleColors.text2,
+                ),
+              ),
+              if (wsConnected) ...[
+                const SizedBox(width: 6),
+                Icon(
+                  networkQuality == 2
+                      ? Icons.signal_wifi_4_bar
+                      : networkQuality == 1
+                          ? Icons.network_wifi_3_bar
+                          : Icons.signal_wifi_bad,
+                  size: 16,
+                  color: networkQuality == 2
+                      ? AudioConsoleColors.teal
+                      : networkQuality == 1
+                          ? const Color(0xFFF59E0B)
+                          : AudioConsoleColors.error,
+                ),
+              ],
+            ],
           ),
           const SizedBox(height: 28),
           // Mode selector pills

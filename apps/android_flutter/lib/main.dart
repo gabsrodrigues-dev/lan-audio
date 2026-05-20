@@ -277,6 +277,9 @@ class _MainShellState extends State<MainShell> {
   bool _autoConnectEnabled = true;
   bool _autoConnectTriggered = false;
   bool _isBluetoothOutput = false;
+  int? _customBufferMs;
+  bool _audioFocusExclusive = false;
+  bool _lastWsConnectedForSnackbar = false;
 
   @override
   void initState() {
@@ -459,6 +462,9 @@ class _MainShellState extends State<MainShell> {
     }
     final metrics = snapshot.metrics;
     final runtimeState = snapshot.state.toLowerCase();
+    final newWsConnected = runtimeState != 'disconnected' && runtimeState != 'closed';
+    // Detect connection state transitions for SnackBar (Feature 6)
+    final previousConnected = _lastWsConnectedForSnackbar;
     setState(() {
       _sampleRate = (metrics['sample_rate'] as num?)?.toInt() ?? _sampleRate;
       _channels = (metrics['channels'] as num?)?.toInt() ?? _channels;
@@ -535,12 +541,30 @@ class _MainShellState extends State<MainShell> {
       }
 
       _wsConnected = runtimeState != 'disconnected' && runtimeState != 'closed';
+      _lastWsConnectedForSnackbar = _wsConnected;
 
       _status = runtimeState == 'recovering'
           ? '${tr('重新连接中', 'Reconnecting')}... (${tr('第', '#')} $_reconnectAttempts${tr('次', '')}, ${_reconnectDelayMs}ms)'
           : '${snapshot.state}/${snapshot.rollbackState}';
       _wsLog = jsonEncode(snapshot.toMap());
     });
+    // Feature 6: Connection status SnackBar
+    if (newWsConnected && !previousConnected) {
+      final name = _serviceTargetName ?? _serviceTargetHost ?? '';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(tr('已连接到 $name', 'Connected to $name')),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } else if (!newWsConnected && previousConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(tr('连接已断开', 'Disconnected')),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   /// Dedupe across discovery sources (mDNS / UDP beacon / probe scan).
@@ -669,6 +693,28 @@ class _MainShellState extends State<MainShell> {
         'enabled': enabled,
       });
     } catch (_) {}
+  }
+
+  void _setCustomBufferMs(int? value) {
+    setState(() {
+      _customBufferMs = value;
+    });
+    if (value != null) {
+      _backgroundService
+          .setOptions(startBufferMs: value, maxBufferMs: value * 3, pingIntervalMs: 1000)
+          .catchError((_) {});
+    } else {
+      // Reset to mode default
+      _backgroundService
+          .setOptions(startBufferMs: 60, maxBufferMs: 300, pingIntervalMs: 1000)
+          .catchError((_) {});
+    }
+  }
+
+  void _setAudioFocusExclusive(bool value) {
+    setState(() {
+      _audioFocusExclusive = value;
+    });
   }
 
   Future<void> _maybeShowFirstUseHint() async {
@@ -1743,6 +1789,15 @@ class _MainShellState extends State<MainShell> {
   int? get _uiLastSeq =>
       kUseBackgroundPlaybackService ? _serviceLastSeq : _lastSeq;
 
+  /// Network quality: 2=good, 1=ok, 0=bad. Based on RTT and loss.
+  int get _networkQuality {
+    final rtt = _tcpRoundTripMs;
+    final loss = _lossPercent ?? 100.0;
+    if (rtt != null && rtt < 10 && loss < 1.0) return 2;
+    if (rtt != null && rtt < 30 && loss < 3.0) return 1;
+    return 0;
+  }
+
   int? get _uiAudioTrackLatencyMs =>
       kUseBackgroundPlaybackService ? _serviceAudioTrackLatencyMs : null;
 
@@ -1948,6 +2003,7 @@ class _MainShellState extends State<MainShell> {
       channels: _channels,
       lossPercent: _lossPercent,
       isBluetoothOutput: _isBluetoothOutput,
+      networkQuality: _networkQuality,
     );
   }
 
@@ -2024,6 +2080,8 @@ class _MainShellState extends State<MainShell> {
           : tr('未连接', 'Disconnected'),
       preferredCodec: _preferredCodec,
       onPreferredCodecChanged: _setPreferredCodec,
+      customBufferMs: _customBufferMs,
+      onBufferMsChanged: _setCustomBufferMs,
       eqEnabled: _eqEnabled,
       eqLowDb: _eqLowDb,
       eqMidDb: _eqMidDb,
@@ -2078,6 +2136,8 @@ class _MainShellState extends State<MainShell> {
       wsLog: _wsLog,
       autoConnectEnabled: _autoConnectEnabled,
       onAutoConnectChanged: _setAutoConnectEnabled,
+      audioFocusExclusive: _audioFocusExclusive,
+      onAudioFocusChanged: _setAudioFocusExclusive,
     );
   }
 }
