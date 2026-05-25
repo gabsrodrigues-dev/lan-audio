@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../audio_console_status.dart';
 import '../audio_console_theme.dart';
+import '../metrics_formatter.dart';
 import '../widgets/danger_action_button.dart';
 import '../widgets/latency_chart_widget.dart';
 import '../widgets/mode_selector_widget.dart';
@@ -25,6 +26,8 @@ class PlayPage extends StatelessWidget {
     required this.onModeSelected,
     required this.onStopPlayback,
     required this.onRetryConnection,
+    required this.onConnectPressed,
+    required this.onDisconnectPressed,
     required this.serverName,
     required this.currentLatencyMs,
     required this.baselineLatencyMs,
@@ -52,6 +55,8 @@ class PlayPage extends StatelessWidget {
   final ValueChanged<String> onModeSelected;
   final VoidCallback onStopPlayback;
   final VoidCallback onRetryConnection;
+  final VoidCallback onConnectPressed;
+  final VoidCallback onDisconnectPressed;
   final String? serverName;
 
   /// Live read of the current end-to-end latency (ms). Sampled by the chart.
@@ -95,17 +100,18 @@ class PlayPage extends StatelessWidget {
           // Large animated status orb
           AnimatedContainer(
             duration: AudioConsoleMotion.orbPulse,
-            width: 64,
-            height: 64,
+            curve: Curves.easeInOut,
+            width: AudioConsoleSizes.statusOrbDiameter,
+            height: AudioConsoleSizes.statusOrbDiameter,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: isPlaying
                   ? AudioConsoleColors.teal
                   : consoleState == ConsoleUiState.error
                       ? AudioConsoleColors.error
-                      : AudioConsoleColors.bg3,
+                      : Colors.transparent,
               border: !isPlaying && consoleState != ConsoleUiState.error
-                  ? Border.all(color: AudioConsoleColors.teal, width: 1.5)
+                  ? Border.all(color: AudioConsoleColors.text2, width: 2.0)
                   : null,
               boxShadow: isPlaying
                   ? [
@@ -121,34 +127,34 @@ class PlayPage extends StatelessWidget {
               isPlaying
                   ? Icons.volume_up
                   : consoleState == ConsoleUiState.error
-                      ? Icons.error_outline
+                      ? Icons.error
                       : Icons.wifi_off,
-              size: 32,
-              color: isPlaying
+              size: 40,
+              color: isPlaying || consoleState == ConsoleUiState.error
                   ? Colors.white
-                  : consoleState == ConsoleUiState.error
-                      ? Colors.white
-                      : AudioConsoleColors.teal,
+                  : AudioConsoleColors.text2,
             ),
           ),
           const SizedBox(height: 16),
-          // Status text
+          // Status text — 20px bold, white (AudioConsoleColors.text)
           Text(
             isPlaying ? tr('正在播放', 'Now Playing') : tr('未连接', 'Disconnected'),
             style: const TextStyle(
+              fontFamily: AudioConsoleType.sansFamily,
               fontSize: 20,
               fontWeight: FontWeight.w700,
               color: AudioConsoleColors.text,
             ),
           ),
           const SizedBox(height: 4),
-          // Server name
+          // Server name — 13px gray (AudioConsoleColors.text2)
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
                 serverName ?? tr('无服务器', 'No server'),
                 style: const TextStyle(
+                  fontFamily: AudioConsoleType.sansFamily,
                   fontSize: 13,
                   color: AudioConsoleColors.text2,
                 ),
@@ -165,7 +171,7 @@ class PlayPage extends StatelessWidget {
                   color: networkQuality == 2
                       ? AudioConsoleColors.teal
                       : networkQuality == 1
-                          ? const Color(0xFFF59E0B)
+                          ? AudioConsoleColors.amber
                           : AudioConsoleColors.error,
                 ),
               ],
@@ -180,6 +186,32 @@ class PlayPage extends StatelessWidget {
             onSelected: onModeSelected,
           ),
           const SizedBox(height: 20),
+          // Primary action button (Connect / Disconnect)
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              key: const Key('primary_action'),
+              onPressed: wsConnected ? onDisconnectPressed : onConnectPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AudioConsoleColors.teal,
+                foregroundColor: AudioConsoleColors.bg,
+                shape: RoundedRectangleBorder(
+                  borderRadius: AudioConsoleRadius.button,
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                elevation: 0,
+              ),
+              child: Text(
+                wsConnected
+                    ? tr('断开连接', 'Disconnect')
+                    : tr('连接服务器', 'Connect'),
+                style: AudioConsoleType.buttonLabel(
+                  color: AudioConsoleColors.bg,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           // Retry button (error state)
           if (consoleState == ConsoleUiState.error) ...[
             FilledButton.tonal(
@@ -202,15 +234,22 @@ class PlayPage extends StatelessWidget {
             height: 1,
           ),
           const SizedBox(height: 12),
-          // One-line metrics
-          Text(
-            '${tr('缓冲', 'Buf')} ${metricBufferText}ms · '
-            '${tr('欠载', 'Underrun')} $metricUnderrunText · '
-            'RTT ${tcpRoundTripMs ?? '-'}ms · '
-            '${tr('丢包', 'Loss')} ${lossPercent != null ? '${lossPercent!.toStringAsFixed(1)}%' : '-'}',
-            style: AudioConsoleType.monoMeta(),
-            textAlign: TextAlign.center,
-          ),
+          // One-line metrics — monospace gray, visible only when connected
+          if (wsConnected)
+            AnimatedOpacity(
+              opacity: wsConnected ? 1.0 : 0.0,
+              duration: AudioConsoleMotion.metricFade,
+              child: Text(
+                formatMetricsLine(
+                  bufferMs: int.tryParse(metricBufferText) ?? 0,
+                  underrunCount: int.tryParse(metricUnderrunText) ?? 0,
+                  rttMs: tcpRoundTripMs,
+                  lossPercent: lossPercent,
+                ),
+                style: AudioConsoleType.monoMeta(),
+                textAlign: TextAlign.center,
+              ),
+            ),
           // Bluetooth latency warning
           if (isBluetoothOutput)
             Padding(
@@ -218,19 +257,20 @@ class PlayPage extends StatelessWidget {
               child: Text(
                 tr('蓝牙输出会增加额外延迟', 'Bluetooth output adds extra latency'),
                 style: AudioConsoleType.monoMeta().copyWith(
-                  color: const Color(0xFFF59E0B),
+                  color: AudioConsoleColors.amber,
                   fontSize: 11,
                 ),
                 textAlign: TextAlign.center,
               ),
             ),
           const SizedBox(height: 14),
-          // Latency comparison chart (Phase 2 visualization)
-          LatencyChartWidget(
-            currentLatencyMs: currentLatencyMs,
-            baselineLatencyMs: baselineLatencyMs,
-            isZh: isZh,
-          ),
+          // Latency comparison chart — visible only when connected
+          if (wsConnected)
+            LatencyChartWidget(
+              currentLatencyMs: currentLatencyMs,
+              baselineLatencyMs: baselineLatencyMs,
+              isZh: isZh,
+            ),
           const SizedBox(height: 8),
           // Audio quality strip — codec / sample rate / channels.
           // Hidden when no session has been negotiated yet.
@@ -265,57 +305,25 @@ class _AudioQualityStrip extends StatelessWidget {
   final int channels;
   final bool isZh;
 
-  String tr(String zh, String en) => isZh ? zh : en;
-
-  String _codecLabel() {
-    switch (codec.toLowerCase()) {
-      case 'opus':
-        return 'Opus';
-      case 'pcm16':
-        return 'PCM 16';
-      case 'f32':
-        return 'PCM Float';
-      default:
-        return codec.toUpperCase();
-    }
-  }
-
-  String _sampleRateLabel() {
-    if (sampleRate >= 1000) {
-      final khz = sampleRate / 1000.0;
-      // Drop trailing .0 for whole-kHz rates (48000 -> "48 kHz").
-      if (khz == khz.truncateToDouble()) {
-        return '${khz.toInt()} kHz';
-      }
-      return '${khz.toStringAsFixed(1)} kHz';
-    }
-    return '$sampleRate Hz';
-  }
-
-  String _channelsLabel() {
-    switch (channels) {
-      case 1:
-        return tr('单声道', 'Mono');
-      case 2:
-        return tr('立体声', 'Stereo');
-      default:
-        return tr('$channels 声道', '$channels ch');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final parts = formatAudioQualityStrip(
+      codec: codec,
+      sampleRate: sampleRate,
+      channels: channels,
+      isZh: isZh,
+    );
     final monoStyle = AudioConsoleType.monoMeta();
     final dotStyle = monoStyle.copyWith(color: AudioConsoleColors.text2);
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text(_codecLabel(), style: monoStyle),
+        Text(parts.codec, style: monoStyle),
         Text(' · ', style: dotStyle),
-        Text(_sampleRateLabel(), style: monoStyle),
+        Text(parts.sampleRate, style: monoStyle),
         Text(' · ', style: dotStyle),
-        Text(_channelsLabel(), style: monoStyle),
+        Text(parts.channels, style: monoStyle),
       ],
     );
   }

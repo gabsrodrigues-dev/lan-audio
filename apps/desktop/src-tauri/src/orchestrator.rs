@@ -276,7 +276,20 @@ pub(crate) fn build_service_snapshot(
         effective_codec,
         state,
         rollback_state,
-        metrics: ServiceMetricsSnapshot::default(),
+        metrics: ServiceMetricsSnapshot {
+            buffered_ms: if metrics.capture_sample_rate > 0 {
+                ((metrics.capture_buffer_frames as u64 * 1000) / metrics.capture_sample_rate) as u32
+            } else {
+                0
+            },
+            underrun: metrics.capture_underruns,
+            late_packets: 0,
+            dropped_packets: metrics.capture_no_packet_count,
+            rtt_ms: 0,
+            reconnect_count: 0,
+            decode_errors: 0,
+            sink_write_gap_ms_p95: 0,
+        },
         last_error: None,
     }
 }

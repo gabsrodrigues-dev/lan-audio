@@ -16,6 +16,11 @@ class AudioConsoleColors {
   static const Color text3 = Color(0xFF4A5568);
   static const Color border = Color.fromRGBO(255, 255, 255, 0.07);
   static const Color borderStrong = Color.fromRGBO(255, 255, 255, 0.12);
+
+  // Navigation bar color aliases
+  static const Color navActive = teal; // #00d4aa
+  static const Color navInactive = text2; // #8892a4
+  static const Color navBackground = bg; // #0c0f14
 }
 
 class AudioConsoleSpacing {
@@ -32,6 +37,12 @@ class AudioConsoleRadius {
   static const BorderRadius button = BorderRadius.all(Radius.circular(10));
   static const BorderRadius card = BorderRadius.all(Radius.circular(14));
   static const BorderRadius pill = BorderRadius.all(Radius.circular(20));
+}
+
+class AudioConsoleSizes {
+  static const double statusOrbDiameter = 100.0;
+  static const double navBarHeight = 56.0;
+  static const double serverCardMinHeight = 64.0;
 }
 
 class AudioConsoleMotion {

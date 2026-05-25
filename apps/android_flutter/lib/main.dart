@@ -14,9 +14,11 @@ import 'connect_history.dart';
 import 'services/mic_capture_service.dart';
 import 'ui/audio_console_status.dart';
 import 'ui/audio_console_theme.dart';
+import 'ui/pages/connect_page.dart';
 import 'ui/pages/more_page.dart';
 import 'ui/pages/play_page.dart';
 import 'ui/pages/power_saving_guide_page.dart';
+import 'ui/pages/settings_page.dart';
 import 'ui/widgets/mode_selector_widget.dart';
 
 const String kAppVersion = '1.14';
@@ -260,7 +262,7 @@ class _MainShellState extends State<MainShell> {
   /// for the current mode" (Opus on v2_header, Pcm16 elsewhere). Set
   /// explicitly via the codec picker. Persists in memory only — re-loads
   /// to null on app restart.
-  String? _preferredCodec;
+  String? _preferredCodec = 'opus';
   bool _eqEnabled = false;
   int _eqLowDb = 0;
   int _eqMidDb = 0;
@@ -542,6 +544,14 @@ class _MainShellState extends State<MainShell> {
 
       _wsConnected = runtimeState != 'disconnected' && runtimeState != 'closed';
       _lastWsConnectedForSnackbar = _wsConnected;
+
+      // Recover server name from connect history when the background service
+      // is already streaming but the UI was restarted (cold start reconnect).
+      if (_wsConnected && _serviceTargetName == null && _connectHistory.isNotEmpty) {
+        final recent = _connectHistory.first;
+        _serviceTargetHost = recent.ip;
+        _serviceTargetName = recent.hostname;
+      }
 
       _status = runtimeState == 'recovering'
           ? '${tr('重新连接中', 'Reconnecting')}... (${tr('第', '#')} $_reconnectAttempts${tr('次', '')}, ${_reconnectDelayMs}ms)'
@@ -1801,56 +1811,6 @@ class _MainShellState extends State<MainShell> {
   int? get _uiAudioTrackLatencyMs =>
       kUseBackgroundPlaybackService ? _serviceAudioTrackLatencyMs : null;
 
-  void _showAdvancedSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(tr('快捷操作', 'Quick Actions'),
-                  style: AudioConsoleType.title()),
-              const SizedBox(height: 16),
-              OutlinedButton(
-                onPressed: _updateCheckRunning
-                    ? null
-                    : () {
-                        Navigator.of(context).pop();
-                        _checkForUpdate(
-                          silentDelayMs: 0,
-                          showNoUpdateHint: true,
-                        );
-                      },
-                child: Text(tr('检查更新', 'Check Update')),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  _openPowerSavingGuide();
-                },
-                child: Text(tr('后台播放', 'Background playback')),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                tr('调试信息请查看「更多」页底部', 'Debug info is in the "More" tab'),
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AudioConsoleColors.text2,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final servers = _servers.values.toList()
@@ -1894,23 +1854,6 @@ class _MainShellState extends State<MainShell> {
     return Scaffold(
       appBar: AppBar(
         title: Text(tr('LAN Audio', 'LAN Audio')),
-        actions: [
-          IconButton(
-            key: const Key('advanced_debug_entry'),
-            tooltip: tr('高级与调试', 'Advanced & Debug'),
-            onPressed: () => _showAdvancedSheet(),
-            icon: const Icon(Icons.tune),
-          ),
-          PopupMenuButton<AppLang>(
-            initialValue: _lang,
-            onSelected: (lang) => setState(() => _lang = lang),
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: AppLang.zh, child: Text('中文')),
-              PopupMenuItem(value: AppLang.en, child: Text('English')),
-            ],
-            icon: const Icon(Icons.language),
-          ),
-        ],
       ),
       body: Stack(
         children: [
@@ -1918,7 +1861,88 @@ class _MainShellState extends State<MainShell> {
             index: _currentTabIndex,
             children: [
               _buildPlayPage(modeItems),
-              _buildMorePage(servers),
+              ConnectPage(
+                isZh: _isZh,
+                connectMode: _connectMode == ConnectMode.discovered
+                    ? 0
+                    : _connectMode == ConnectMode.manual
+                        ? 1
+                        : 2,
+                onConnectModeChanged: (mode) {
+                  setState(() {
+                    _connectMode = mode == 0
+                        ? ConnectMode.discovered
+                        : mode == 1
+                            ? ConnectMode.manual
+                            : ConnectMode.usb;
+                  });
+                },
+                isConnecting: _isConnecting,
+                probeRunning: _probeRunning,
+                nsdDiscoveryRunning: _nsdDiscoveryRunning,
+                discoveryTimedOut: _discoveryTimedOut,
+                manualHostController: _manualHostController,
+                servers: servers
+                    .map((s) => MoreServerData(
+                          serverId: s.serverId,
+                          serverName: s.serverName,
+                          host: s.host,
+                          wsPort: s.wsPort,
+                          udpPort: s.udpPort,
+                          latencyMs: s.latencyMs,
+                        ))
+                    .toList(),
+                selectedServerId: _selectedServerId,
+                onServerSelected: (id) {
+                  setState(() {
+                    _selectedServerId = id;
+                  });
+                },
+                isRecentHost: _isRecentHost,
+                onConnectSelected: _connectSelected,
+                onConnectManual: _connectManual,
+                onConnectUsb: _connectUsb,
+                onScanLan: () {
+                  _startNsdDiscovery();
+                  _probeSubnetForServers();
+                },
+                wsConnected: _wsConnected,
+                connectHistory: _connectHistory,
+              ),
+              SettingsPage(
+                isZh: _isZh,
+                preferredCodec: _preferredCodec,
+                onPreferredCodecChanged: _setPreferredCodec,
+                customBufferMs: _customBufferMs,
+                onBufferMsChanged: _setCustomBufferMs,
+                eqEnabled: _eqEnabled,
+                eqLowDb: _eqLowDb,
+                eqMidDb: _eqMidDb,
+                eqHighDb: _eqHighDb,
+                onSetEq: _setEq,
+                onApplyEqPreset: _applyEqPreset,
+                micService: _micService,
+                micEnabled: _micEnabled,
+                serviceTargetHost: _serviceTargetHost,
+                reverseChannelPort: _reverseChannelPort,
+                onToggleMic: _toggleMicCapture,
+                loudnessNormalizationEnabled: _loudnessNormalizationEnabled,
+                onSetLoudnessNormalization: _setLoudnessNormalization,
+                lang: _lang == AppLang.zh ? 'zh' : 'en',
+                onLangChanged: (l) =>
+                    setState(() => _lang = l == 'zh' ? AppLang.zh : AppLang.en),
+                onOpenPowerSavingGuide: _openPowerSavingGuide,
+                onCheckUpdate: () => _checkForUpdate(
+                  silentDelayMs: 0,
+                  showNoUpdateHint: true,
+                ),
+                updateCheckRunning: _updateCheckRunning,
+                autoConnectEnabled: _autoConnectEnabled,
+                onAutoConnectChanged: _setAutoConnectEnabled,
+                audioFocusExclusive: _audioFocusExclusive,
+                onAudioFocusChanged: _setAudioFocusExclusive,
+                debugData: _buildDebugData(),
+              ),
             ],
           ),
           // Volume pill overlay
@@ -1958,18 +1982,22 @@ class _MainShellState extends State<MainShell> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentTabIndex,
         onTap: (index) => setState(() => _currentTabIndex = index),
-        backgroundColor: AudioConsoleColors.surface,
-        selectedItemColor: AudioConsoleColors.teal,
-        unselectedItemColor: AudioConsoleColors.text2,
+        backgroundColor: AudioConsoleColors.navBackground,
+        selectedItemColor: AudioConsoleColors.navActive,
+        unselectedItemColor: AudioConsoleColors.navInactive,
         type: BottomNavigationBarType.fixed,
         items: [
           BottomNavigationBarItem(
             icon: const Icon(Icons.play_circle_outline),
-            label: _isZh ? '播放' : 'Play',
+            label: tr('播放', 'Play'),
           ),
           BottomNavigationBarItem(
-            icon: const Icon(Icons.more_horiz),
-            label: _isZh ? '更多' : 'More',
+            icon: const Icon(Icons.link),
+            label: tr('连接', 'Connect'),
+          ),
+          BottomNavigationBarItem(
+            icon: const Icon(Icons.settings),
+            label: tr('设置', 'Settings'),
           ),
         ],
       ),
@@ -1994,6 +2022,8 @@ class _MainShellState extends State<MainShell> {
       onModeSelected: (id) => _setAudioMode(_modeFromId(id)),
       onStopPlayback: _stopPlayback,
       onRetryConnection: _connectSelected,
+      onConnectPressed: _connectSelected,
+      onDisconnectPressed: _stopPlayback,
       serverName: _serviceTargetName,
       currentLatencyMs: () =>
           _wsConnected ? _serviceBufferedMs.toDouble() : null,
@@ -2027,118 +2057,42 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  Widget _buildMorePage(List<DiscoveryServer> servers) {
-    return MorePage(
-      isZh: _isZh,
-      connectMode: _connectMode == ConnectMode.discovered
-          ? 0
-          : _connectMode == ConnectMode.manual
-              ? 1
-              : 2,
-      onConnectModeChanged: (mode) {
-        setState(() {
-          _connectMode = mode == 0
-              ? ConnectMode.discovered
-              : mode == 1
-                  ? ConnectMode.manual
-                  : ConnectMode.usb;
-        });
-      },
-      isConnecting: _isConnecting,
-      probeRunning: _probeRunning,
-      nsdDiscoveryRunning: _nsdDiscoveryRunning,
-      discoveryTimedOut: _discoveryTimedOut,
-      manualHostController: _manualHostController,
-      servers: servers
-          .map((s) => MoreServerData(
-                serverId: s.serverId,
-                serverName: s.serverName,
-                host: s.host,
-                wsPort: s.wsPort,
-                udpPort: s.udpPort,
-                latencyMs: s.latencyMs,
-              ))
-          .toList(),
-      selectedServerId: _selectedServerId,
-      onServerSelected: (id) {
-        setState(() {
-          _selectedServerId = id;
-        });
-      },
-      isRecentHost: _isRecentHost,
-      onConnectSelected: _connectSelected,
-      onConnectManual: _connectManual,
-      onConnectUsb: _connectUsb,
-      onScanLan: () {
-        _startNsdDiscovery();
-        _probeSubnetForServers();
-      },
-      connectActionLabel: _connectActionLabel(),
-      wsConnected: _wsConnected,
-      connectionStatusText: _wsConnected
-          ? '${tr('已连接', 'Connected')} ${_serviceTargetHost ?? ''}'
-          : tr('未连接', 'Disconnected'),
-      preferredCodec: _preferredCodec,
-      onPreferredCodecChanged: _setPreferredCodec,
-      customBufferMs: _customBufferMs,
-      onBufferMsChanged: _setCustomBufferMs,
-      eqEnabled: _eqEnabled,
-      eqLowDb: _eqLowDb,
-      eqMidDb: _eqMidDb,
-      eqHighDb: _eqHighDb,
-      onSetEq: _setEq,
-      onApplyEqPreset: _applyEqPreset,
-      micService: _micService,
-      micEnabled: _micEnabled,
-      serviceTargetHost: _serviceTargetHost,
-      reverseChannelPort: _reverseChannelPort,
-      onToggleMic: _toggleMicCapture,
-      loudnessNormalizationEnabled: _loudnessNormalizationEnabled,
-      onSetLoudnessNormalization: _setLoudnessNormalization,
-      onOpenPowerSavingGuide: _openPowerSavingGuide,
-      onCheckUpdate: () => _checkForUpdate(
-        silentDelayMs: 0,
-        showNoUpdateHint: true,
-      ),
-      updateCheckRunning: _updateCheckRunning,
-      protocolVersion: _protocolVersion,
-      currentAudioModeLabel: _audioModeLabel(_currentAudioMode),
-      protocolPath: _protocolPath,
-      experimentalPath: _experimentalPath,
-      effectiveCodec: _effectiveCodec,
-      serverPlatform: _serverPlatform,
-      serverAppVersion: _serverAppVersion,
-      negotiatedCapabilities: _negotiatedCapabilities,
-      sampleRate: _sampleRate,
-      channels: _channels,
-      uiBufferedMs: _uiBufferedMs,
-      uiJitterBufferedMs: _uiJitterBufferedMs,
-      uiTrackQueuedMs: _uiTrackQueuedMs,
-      uiAudioTrackLatencyMs: _uiAudioTrackLatencyMs,
-      uiUnderrun: _uiUnderrun,
-      uiDropped: _uiDropped,
-      uiLate: _uiLate,
-      uiFloorHoldCount: _uiFloorHoldCount,
-      uiJitterP95Ms: _uiJitterP95Ms,
-      playbackBackend: _playbackBackend,
-      connectionPathLabel: _connectionPathLabel(_connectionPath),
-      transportMode: _transportMode,
-      connectedClientCount: _connectedClientCount,
-      tcpRoundTripMs: _tcpRoundTripMs,
-      tcpRoundTripMedianMs: _tcpRoundTripMedianMs,
-      modeProfile: _modeProfile,
-      loudnessGainDb: _loudnessGainDb,
-      isPlaying: _playbackState == PlaybackState.playing,
-      uiUdpPackets: _uiUdpPackets,
-      uiUdpBytes: _uiUdpBytes,
-      uiUdpLoss: _uiUdpLoss,
-      uiLastSeq: _uiLastSeq,
-      wsLog: _wsLog,
-      autoConnectEnabled: _autoConnectEnabled,
-      onAutoConnectChanged: _setAutoConnectEnabled,
-      audioFocusExclusive: _audioFocusExclusive,
-      onAudioFocusChanged: _setAudioFocusExclusive,
-    );
+  /// Builds a debug data map for the SettingsPage debug info card.
+  Map<String, String> _buildDebugData() {
+    return {
+      tr('协议版本', 'Protocol'): 'v${_protocolVersion ?? 1}',
+      tr('当前模式', 'Mode'): _audioModeLabel(_currentAudioMode),
+      tr('协议路径', 'Protocol path'):
+          '$_protocolPath${_experimentalPath ? ' (${tr('灰度', 'gray')})' : ''}',
+      'Codec': _effectiveCodec,
+      if (_serverPlatform != null || _serverAppVersion != null)
+        tr('服务端', 'Server'):
+            '${_serverPlatform ?? 'unknown'}${_serverAppVersion == null ? '' : ' ($_serverAppVersion)'}',
+      tr('采样率', 'Sample rate'): '$_sampleRate',
+      tr('声道', 'Channels'): '$_channels',
+      tr('总缓冲', 'Total buffered'): '$_uiBufferedMs ms',
+      tr('抖动', 'Jitter'): '$_uiJitterBufferedMs ms',
+      tr('播放后端', 'Playback backend'): _playbackBackend,
+      tr('连接来源', 'Connection path'): _connectionPathLabel(_connectionPath),
+      tr('传输模式', 'Transport mode'):
+          _transportMode == 'usb' ? 'USB' : 'WiFi',
+      tr('当前设备数', 'Connected devices'): '$_connectedClientCount',
+      'TCP RTT': _tcpRoundTripMs == null
+          ? '-'
+          : '$_tcpRoundTripMs ms / $_tcpRoundTripMedianMs ms (med)',
+      'wsLog': _wsLog,
+      'negotiatedCapabilities': _negotiatedCapabilities.toString(),
+      'modeProfile': _modeProfile.toString(),
+      'connectActionLabel': _connectActionLabel(),
+      'trackQueued': '$_uiTrackQueuedMs ms',
+      'dropped': '$_uiDropped',
+      'late': '$_uiLate',
+      'floorHold': '$_uiFloorHoldCount',
+      'jitterP95': '${_uiJitterP95Ms ?? '-'} ms',
+      'udpBytes': '$_uiUdpBytes',
+      'lastSeq': '${_uiLastSeq ?? '-'}',
+      'audioTrackLatency': '${_uiAudioTrackLatencyMs ?? '-'} ms',
+    };
   }
 }
 

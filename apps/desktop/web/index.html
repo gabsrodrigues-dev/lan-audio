@@ -11,11 +11,13 @@
         --line: rgba(255,255,255,0.09);
         --accent: #00d4aa;
         --accent-dim: rgba(0,212,170,0.12);
+        --accent-glow: rgba(0,212,170,0.25);
         --error: #ef4444;
         --warn: #f59e0b;
         --text: #f0f2f7;
         --muted: #8892a4;
         --mono: "SF Mono", Consolas, "Courier New", monospace;
+        --card-radius: 12px;
       }
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
@@ -27,7 +29,7 @@
       }
 
       /* App container */
-      .app { max-width: 560px; margin: 12px auto; padding: 0 16px; }
+      .app { max-width: 560px; margin: 12px auto; padding: 0 16px 16px; }
 
       /* Header */
       .header {
@@ -293,7 +295,7 @@
       .health-strip { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
       .health-label { color: var(--muted); margin-right: 4px; }
 
-      /* Latency comparison card (Phase 5) */
+      /* Latency comparison card */
       .latency-card {
         background: #131720;
         border: 1px solid var(--line);
@@ -349,7 +351,7 @@
       }
       .legend-text { color: var(--muted); font-size: 10px; }
 
-      /* USB block inside debug */
+      /* USB block */
       .usb-block {
         margin-top: 8px;
         border-top: 1px solid var(--line);
@@ -420,12 +422,12 @@
 
       /* Responsive breakpoints */
       @media (max-width: 580px) {
-        .app { padding: 0 10px; margin: 10px auto; }
+        .app { padding: 0 10px 16px; margin: 10px auto; }
         .field select { min-width: 100px; }
         .qr-row { flex-direction: column; align-items: flex-start; }
       }
       @media (max-width: 360px) {
-        .app { padding: 0 8px; }
+        .app { padding: 0 8px 16px; }
         .title { font-size: 13px; }
         .field { flex-direction: column; align-items: flex-start; gap: 4px; }
         .field select { width: 100%; min-width: unset; }
@@ -479,30 +481,7 @@
         </details>
       </div>
 
-      <!-- Settings -->
-      <div class="card">
-        <div class="section-title" id="settingsSectionTitle">推流设置</div>
-        <div class="field">
-          <span id="audioSourceLabel">音频源</span>
-          <select id="audioSourceSelect">
-            <option value="windows_loopback" data-i18n="loopback">系统音频</option>
-            <option value="synthetic" data-i18n="synthetic">测试音</option>
-          </select>
-        </div>
-        <div class="field">
-          <span id="codecLabelTop">编码</span>
-          <select id="codecSelect">
-            <option value="opus" data-i18n="opusExperimental">Opus</option>
-            <option value="pcm16" data-i18n="pcm16">PCM16</option>
-          </select>
-        </div>
-        <label class="field-toggle">
-          <input type="checkbox" id="fallbackToggle" />
-          <span id="fallbackLabel"></span>
-        </label>
-      </div>
-
-      <!-- Latency chart (Phase 5 visualization — Scheme A) -->
+      <!-- Latency chart (shown when streaming) -->
       <div class="card is-hidden" id="latencyCard">
         <div class="latency-header">
           <div class="latency-header-left">
@@ -528,8 +507,30 @@
         </div>
       </div>
 
-      <!-- USB Panel (first-class card, only when USB available) -->
-      <div class="card is-hidden" id="usbPanel">
+      <!-- Settings (inline) -->
+      <div class="card">
+        <div class="field">
+          <span id="audioSourceLabel">音频源</span>
+          <select id="audioSourceSelect">
+            <option value="windows_loopback" data-i18n="loopback">系统音频</option>
+            <option value="synthetic" data-i18n="synthetic">测试音</option>
+          </select>
+        </div>
+        <div class="field">
+          <span id="codecLabelTop">编码</span>
+          <select id="codecSelect">
+            <option value="opus" data-i18n="opusExperimental">Opus</option>
+            <option value="pcm16" data-i18n="pcm16">PCM16</option>
+          </select>
+        </div>
+        <label class="field-toggle">
+          <input type="checkbox" id="fallbackToggle" />
+          <span id="fallbackLabel"></span>
+        </label>
+      </div>
+
+      <!-- USB Panel -->
+      <div class="card" id="usbPanel">
         <div class="section-title" id="usbTitle">USB 模式(adb)</div>
         <div class="usb-block-actions">
           <button id="usbRefreshBtn" type="button"></button>
@@ -540,7 +541,7 @@
         <div class="usb-device-list" id="usbDeviceList"></div>
       </div>
 
-      <!-- Debug (technical readouts only) -->
+      <!-- Debug (advanced info) -->
       <details class="card debug" id="debugDetails">
         <summary id="debugSummary">▸ 高级信息</summary>
         <div class="debug-content">
@@ -550,7 +551,7 @@
             · <span class="health-label" id="healthDevicesLabel"></span><span id="healthDevicesValue"></span>
           </div>
 
-          <!-- Technical readouts (data plane / protocol / version / session / mode / codec) -->
+          <!-- Technical readouts -->
           <div class="debug-meta">
             <div><span id="dataPlaneLabel">数据面</span>: <span id="dataPlaneValue"></span></div>
             <div><span id="codecLabel">Codec</span>: <span id="codecValue"></span></div>
@@ -1053,6 +1054,7 @@
       function renderText() {
         document.documentElement.lang = state.lang === 'zh' ? 'zh-CN' : 'en';
         document.getElementById('title').textContent = t('title');
+
         document.getElementById('audioSourceLabel').textContent = t('audioSourceLabel');
         document.getElementById('codecLabelTop').textContent = t('codecLabelTop');
         document.getElementById('fallbackLabel').textContent = t('fallback');
@@ -1071,10 +1073,9 @@
         document.getElementById('usbStateLabel').textContent = t('usbState');
         document.getElementById('usbForwardLabel').textContent = t('usbForward');
 
-        // Debug-meta labels (data plane / codec / protocol / version / session / mode)
+        // Debug-meta labels
         document.getElementById('dataPlaneLabel').textContent = t('debugMetaDataPlane');
         document.getElementById('codecLabel').textContent = t('debugMetaCodec');
-        // Latency comparison chart i18n
         document.getElementById('latencyTitle').textContent = t('latencyTitle');
         document.getElementById('latencyLegendBefore').textContent = t('latencyLegendBefore');
         document.getElementById('latencyLegendCurrent').textContent = t('latencyLegendCurrent');
@@ -1086,7 +1087,6 @@
         document.getElementById('healthStreamLabel').textContent = t('healthStreamLabel');
         document.getElementById('healthDevicesLabel').textContent = t('healthDevicesLabel');
         document.getElementById('logsSummary').textContent = t('logsSummary');
-        document.getElementById('settingsSectionTitle').textContent = t('settingsSectionTitle');
         document.getElementById('micCardTitle').textContent = t('micCardTitle');
 
         // Localize <select> option labels
@@ -1172,7 +1172,7 @@
         document.getElementById('healthDevicesValue').textContent =
           snapshot.connected_devices > 0 ? String(snapshot.connected_devices) : t('noDevice');
 
-        // Debug-meta values (data plane / codec / protocol / version / session / mode)
+        // Debug-meta values
         document.getElementById('sessionValue').textContent =
           t(`session_${runtime.state}`) || runtime.state || snapshot.session_status || '';
         document.getElementById('dataPlaneValue').textContent =
@@ -1223,7 +1223,7 @@
           logPane.appendChild(div);
         });
 
-        // Mic / virtual device status — only show card when mic is active or there's a warning
+        // Mic / virtual device status
         const micCard = document.getElementById('micCard');
         const micStatus = document.getElementById('micStatusText');
         const micWarningRow = document.getElementById('micWarningRow');
@@ -1247,13 +1247,7 @@
           micHelpText.style.display = 'none';
         }
 
-        // USB panel visibility (first-class card; show only when USB or adb devices visible)
-        const usbPanel = document.getElementById('usbPanel');
-        const showUsb =
-          snapshot.transport_mode === 'usb' || (state.adbDevices && state.adbDevices.length > 0);
-        usbPanel.classList.toggle('is-hidden', !showUsb);
-
-        // Latency chart only when service is running (avoids empty chart in idle UI)
+        // Latency chart only when service is running
         const latencyCard = document.getElementById('latencyCard');
         latencyCard.classList.toggle('is-hidden', snapshot.service_status !== 'running');
 
@@ -1268,7 +1262,6 @@
             const lossPct = totalPackets > 0 ? ((totalLoss / totalPackets) * 100) : 0;
             lossEl.textContent = `${t('lossLabel')} ${lossPct.toFixed(1)}%`;
             lossEl.style.display = 'inline';
-            // Color coding: green=0%, amber=1-5%, red=>5%
             if (lossPct <= 0) {
               lossEl.style.color = 'var(--accent)';
             } else if (lossPct <= 5) {
@@ -1454,11 +1447,7 @@
         document.getElementById('usbDisableBtn').addEventListener('click', disableUsbMode);
       }
 
-      // ---------- Latency comparison chart (Phase 5) ----------
-      // Rolling 60s window, sampled every 500ms. Two series: a static
-      // pre-optimization baseline (mode-dependent) and the live measured
-      // buffered_ms reported by the runtime snapshot. Renders into the
-      // <canvas id="latencyCanvas">.
+      // ---------- Latency comparison chart ----------
       const latencyChart = (() => {
         const REFRESH_MS = 500;
         const WINDOW_S = 60;
@@ -1469,7 +1458,6 @@
         let timer = null;
 
         function modeBaseline(modeId) {
-          // Pre-optimization reference latency per mode.
           switch (modeId) {
             case 'ultra_low_latency': return 64;
             case 'low_latency': return 110;
@@ -1522,7 +1510,7 @@
           for (const v of current) if (v > mx) mx = v;
           const maxVal = Math.min(1000, Math.max(50, mx * 1.2));
 
-          // Grid: 3 lines, only top/bottom labeled.
+          // Grid lines
           ctx.font = '8px "SF Mono", Consolas, monospace';
           ctx.fillStyle = 'rgba(74,85,104,0.9)';
           ctx.strokeStyle = 'rgba(255,255,255,0.05)';
@@ -1543,7 +1531,7 @@
             }
           }
 
-          // Dashed baseline.
+          // Dashed baseline
           if (baseVal > 0) {
             const baseY = plot.y + plot.h * (1 - Math.min(1, baseVal / maxVal));
             ctx.setLineDash([4, 3]);
@@ -1554,7 +1542,6 @@
             ctx.lineTo(plot.x + plot.w, baseY);
             ctx.stroke();
             ctx.setLineDash([]);
-            // Label on right.
             ctx.font = '9px "SF Mono", Consolas, monospace';
             ctx.fillStyle = 'rgba(96,165,250,0.8)';
             const label = String(Math.round(baseVal));
@@ -1562,10 +1549,10 @@
             ctx.fillText(label, plot.x + plot.w - lw, baseY - 3);
           }
 
-          // Current series with smooth curve.
+          // Current series
           drawSmoothSeries(ctx, plot, current, '#00d4aa', maxVal);
 
-          // Update real-time value display.
+          // Update real-time value display
           const valueEl = document.getElementById('latencyValue');
           if (valueEl) {
             const latest = current.length ? current[current.length - 1] : 0;
@@ -1578,7 +1565,6 @@
           const stride = plot.w / Math.max(1, MAX_SAMPLES - 1);
           const startX = plot.x + plot.w - stride * (values.length - 1);
 
-          // Build points.
           const points = [];
           for (let i = 0; i < values.length; i++) {
             const x = startX + stride * i;
@@ -1587,7 +1573,6 @@
             points.push({ x, y });
           }
 
-          // Catmull-Rom to cubic bezier path.
           ctx.save();
           ctx.beginPath();
           ctx.rect(plot.x, plot.y, plot.w, plot.h);
@@ -1607,7 +1592,6 @@
             path.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
           }
 
-          // Fill area.
           const fillPath = new Path2D();
           fillPath.moveTo(points[0].x, plot.y + plot.h);
           fillPath.lineTo(points[0].x, points[0].y);
@@ -1631,14 +1615,12 @@
           ctx.fillStyle = grad;
           ctx.fill(fillPath);
 
-          // Stroke.
           ctx.strokeStyle = color;
           ctx.lineWidth = 1.8;
           ctx.lineJoin = 'round';
           ctx.lineCap = 'round';
           ctx.stroke(path);
 
-          // Dot at latest point.
           if (points.length > 0) {
             const last = points[points.length - 1];
             ctx.beginPath();

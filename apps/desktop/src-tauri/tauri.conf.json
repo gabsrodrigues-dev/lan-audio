@@ -1,6 +1,6 @@
 {
     "productName":  "LAN Audio",
-    "version":  "1.14.0",
+    "version":  "1.15.0",
     "identifier":  "com.example.lanaudio.desktop",
     "build":  {
                   "beforeDevCommand":  "",
@@ -13,10 +13,10 @@
                                 {
                                     "label":  "main",
                                     "title":  "LAN Audio",
-                                    "width":  680,
-                                    "height":  760,
-                                    "minWidth":  480,
-                                    "minHeight":  600,
+                                    "width":  480,
+                                    "height":  580,
+                                    "minWidth":  400,
+                                    "minHeight":  500,
                                     "resizable":  true,
                                     "center":  true,
                                     "visible":  true,

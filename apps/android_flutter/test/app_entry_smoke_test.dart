@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lan_audio_android/main.dart';
-import 'package:lan_audio_android/ui/mic_status_widget.dart';
+import 'package:lan_audio_android/ui/pages/connect_page.dart';
+import 'package:lan_audio_android/ui/pages/play_page.dart';
+import 'package:lan_audio_android/ui/pages/settings_page.dart';
 import 'package:lan_audio_android/ui/widgets/danger_action_button.dart';
 import 'package:lan_audio_android/ui/widgets/mode_selector_widget.dart';
 
 void main() {
   testWidgets('app entry uses Audio Console Dark instead of MVP UI',
       (tester) async {
-    await tester.binding.setSurfaceSize(const Size(420, 1200));
+    await tester.binding.setSurfaceSize(const Size(480, 1200));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(const LanAudioApp());
@@ -27,24 +29,44 @@ void main() {
     // No debug build tag in the widget tree
     expect(find.textContaining('audio-console-dark'), findsNothing);
 
-    // Core Audio Console Dark components are mounted
+    // --- 3-tab widget tree: PlayPage, ConnectPage, SettingsPage ---
+    // All three pages mount in the IndexedStack (replaces old MorePage).
+    // IndexedStack wraps non-active children in Offstage, so we use
+    // skipOffstage: false to find them.
+    expect(find.byType(PlayPage), findsOneWidget);
+    expect(
+      find.byType(ConnectPage, skipOffstage: false),
+      findsOneWidget,
+    );
+    expect(
+      find.byType(SettingsPage, skipOffstage: false),
+      findsOneWidget,
+    );
+
+    // 3-tab navigation icons present: play_circle_outline, link, settings
+    expect(find.byIcon(Icons.play_circle_outline), findsOneWidget);
+    expect(find.byIcon(Icons.link), findsOneWidget);
+    expect(find.byIcon(Icons.settings), findsOneWidget);
+
+    // Core Audio Console Dark components are mounted in PlayPage
     expect(find.byType(ModeSelectorWidget), findsOneWidget);
     expect(find.byType(DangerActionButton), findsOneWidget);
-    // JitterGraphWidget is conditionally rendered (only when streaming),
-    // so it may not be present in idle state 鈥?verify MicStatusWidget instead.
-    // MicStatusWidget is on the Audio tab (offstage in IndexedStack).
-    expect(find.byType(MicStatusWidget, skipOffstage: false), findsOneWidget);
 
-    // Hero status equivalent: animated status orb exists (48x48 AnimatedContainer)
+    // Status orb: AnimatedContainer exists (100px orb in PlayPage)
     expect(find.byType(AnimatedContainer), findsWidgets);
 
     // DangerActionButton has correct label
     expect(find.text('Stop Playback'), findsOneWidget);
 
-    // buildAudioConsoleTheme is applied (scaffold background is dark)
+    // buildAudioConsoleTheme() is applied (scaffold background is dark)
     final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
-    // The theme's scaffoldBackgroundColor is AudioConsoleColors.bg (#0C0F14)
-    // which is applied via the theme, not directly on Scaffold
     expect(scaffold, isNotNull);
+    // The theme's scaffoldBackgroundColor comes from buildAudioConsoleTheme()
+    // which sets it to AudioConsoleColors.bg (#0C0F14) — a dark color
+    final scaffoldBgColor =
+        Theme.of(tester.element(find.byType(Scaffold).first))
+            .scaffoldBackgroundColor;
+    // Verify it's a dark background (luminance < 0.1 means very dark)
+    expect(scaffoldBgColor.computeLuminance(), lessThan(0.1));
   });
 }
