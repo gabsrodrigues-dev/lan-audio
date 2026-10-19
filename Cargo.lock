@@ -1807,7 +1807,7 @@ dependencies = [
 
 [[package]]
 name = "lan_audio_desktop"
-version = "1.14.0"
+version = "1.15.0"
 dependencies = [
  "anyhow",
  "lan_audio_protocol",

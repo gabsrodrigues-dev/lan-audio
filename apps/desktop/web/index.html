@@ -512,7 +512,7 @@
         <div class="field">
           <span id="audioSourceLabel">音频源</span>
           <select id="audioSourceSelect">
-            <option value="windows_loopback" data-i18n="loopback">系统音频</option>
+            <option value="system_loopback" data-i18n="loopback">系统音频</option>
             <option value="synthetic" data-i18n="synthetic">测试音</option>
           </select>
         </div>
@@ -603,7 +603,7 @@
       const I18N = {
         zh: {
           title: 'LAN Audio',
-          subtitle: 'Windows 系统音频推送到 Android 手机',
+          subtitle: '电脑系统音频推送到 Android 手机 (Windows / Linux)',
           audioSourceLabel: '音频源',
           codecLabelTop: '编码',
           loopback: '系统音频',
@@ -665,6 +665,8 @@
           session_error: '服务异常',
           session_stopped: '服务未启动',
           source_windows_loopback: '系统音频',
+          source_linux_loopback: '系统音频 (Linux)',
+          source_system_loopback: '系统音频',
           source_synthetic: '测试音',
           data_plane_legacy_las1: 'Legacy LAS1',
           data_plane_v2_header: 'V2 Header',
@@ -716,7 +718,7 @@
         },
         en: {
           title: 'LAN Audio',
-          subtitle: 'Stream Windows system audio to Android devices',
+          subtitle: 'Stream PC system audio (Windows / Linux) to Android devices',
           audioSourceLabel: 'Audio Source',
           codecLabelTop: 'Codec',
           loopback: 'System Audio',
@@ -778,6 +780,8 @@
           session_error: 'Service error',
           session_stopped: 'Service not started',
           source_windows_loopback: 'System Audio',
+          source_linux_loopback: 'System Audio (Linux)',
+          source_system_loopback: 'System Audio',
           source_synthetic: 'Test Tone',
           data_plane_legacy_las1: 'Legacy LAS1',
           data_plane_v2_header: 'V2 Header',
@@ -893,7 +897,8 @@
           'Windows 防火墙放行步骤 / Windows Firewall steps:\n' +
           '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n' +
           '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n' +
-          '3. 端口 39991, TCP+UDP, 允许连接 / Allow TCP+UDP port 39991';
+          '3. 端口 39991, TCP+UDP, 允许连接 / Allow TCP+UDP port 39991\n' +
+          'Linux (ufw): sudo ufw allow 39990:39992/udp && sudo ufw allow 39991/tcp && sudo ufw allow 7878:7879/tcp';
         if (message.includes('connection refused') || message.includes('econnrefused') || message.includes('refused')) {
           return {
             title: state.lang === 'zh'
@@ -916,8 +921,8 @@
               ? '版本不兼容, 请检查双端版本号'
               : 'Version mismatch. Check both app versions',
             body:
-              '确认 Windows 与 Android 都是同一发布版本。\n' +
-              'Make sure Windows and Android are running the same LAN Audio release.',
+              '确认电脑与 Android 都是同一发布版本。\n' +
+              'Make sure the PC and Android are running the same LAN Audio release.',
           };
         }
         return null;
@@ -1133,8 +1138,9 @@
 
         // Settings <select> reflect current snapshot
         const sourceSelect = document.getElementById('audioSourceSelect');
-        if (sourceSelect.value !== snapshot.audio_source) {
-          sourceSelect.value = snapshot.audio_source;
+        const sourceValue = /_loopback$/.test(snapshot.audio_source) ? 'system_loopback' : snapshot.audio_source;
+        if (sourceSelect.value !== sourceValue) {
+          sourceSelect.value = sourceValue;
         }
         const codecSelect = document.getElementById('codecSelect');
         if (codecSelect.value !== snapshot.codec_selection) {

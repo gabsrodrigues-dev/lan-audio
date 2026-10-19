@@ -30,7 +30,7 @@ fn apply_runtime_path_mode_to_config(
     config: &mut crate::state::DesktopServiceConfig,
     rollback: bool,
 ) {
-    config.audio_source = AudioSourceKind::WindowsLoopback;
+    config.audio_source = AudioSourceKind::system_loopback();
     config.allow_loopback_v2_header_gray = false;
     if rollback {
         config.data_plane_format = DataPlaneFormat::LegacyLas1;
@@ -58,7 +58,7 @@ fn apply_runtime_path_mode(state: &State<'_, AppState>, rollback: bool) -> Resul
     };
     push_log(
         &state.logs,
-        format!("runtime path switched: windows_loopback + {data_plane} + {codec}"),
+        format!("runtime path switched: system loopback + {data_plane} + {codec}"),
     );
 
     if restart_needed {
@@ -587,12 +587,12 @@ mod tests {
         let mut cfg = DesktopServiceConfig::default();
 
         apply_runtime_path_mode_to_config(&mut cfg, true);
-        assert_eq!(cfg.audio_source, AudioSourceKind::WindowsLoopback);
+        assert_eq!(cfg.audio_source, AudioSourceKind::system_loopback());
         assert_eq!(cfg.data_plane_format, DataPlaneFormat::LegacyLas1);
         assert_eq!(cfg.codec_selection, CodecSelection::Pcm16);
 
         apply_runtime_path_mode_to_config(&mut cfg, false);
-        assert_eq!(cfg.audio_source, AudioSourceKind::WindowsLoopback);
+        assert_eq!(cfg.audio_source, AudioSourceKind::system_loopback());
         assert_eq!(cfg.data_plane_format, DataPlaneFormat::V2Header);
         assert_eq!(cfg.codec_selection, CodecSelection::Opus);
     }

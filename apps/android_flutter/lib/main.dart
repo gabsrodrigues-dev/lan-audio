@@ -68,7 +68,8 @@ FirewallGuidance? firewallGuidanceForMessage(String? raw) {
       body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
           '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
           '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
-          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991\n'
+          'Linux (ufw): sudo ufw allow 39990:39992/udp && sudo ufw allow 39991/tcp',
     );
   }
   if (message.contains('timeout') ||
@@ -77,11 +78,12 @@ FirewallGuidance? firewallGuidanceForMessage(String? raw) {
     return const FirewallGuidance(
       titleZh: '设备不在同一局域网，或 PC 防火墙未放行 UDP/TCP 39991',
       titleEn:
-          'Device is not on the same LAN or Windows Firewall blocks UDP/TCP 39991',
+          'Device is not on the same LAN or the PC firewall blocks UDP/TCP 39991',
       body: 'Windows 防火墙放行步骤 / Windows Firewall steps:\n'
           '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n'
           '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n'
-          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991',
+          '3. 端口 39991，TCP+UDP，允许连接 / Allow TCP+UDP port 39991\n'
+          'Linux (ufw): sudo ufw allow 39990:39992/udp && sudo ufw allow 39991/tcp',
     );
   }
   if (message.contains('auth') ||
@@ -90,8 +92,8 @@ FirewallGuidance? firewallGuidanceForMessage(String? raw) {
     return const FirewallGuidance(
       titleZh: '版本不兼容，请检查双端版本号',
       titleEn: 'Version mismatch. Check both app versions',
-      body: '确认 Windows 与 Android 都是同一发布版本。\n'
-          'Make sure Windows and Android are running the same LAN Audio release.',
+      body: '确认电脑与 Android 都是同一发布版本。\n'
+          'Make sure the PC and Android are running the same LAN Audio release.',
     );
   }
   return null;

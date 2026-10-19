@@ -1,0 +1,77 @@
+name: Build Linux Client
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths:
+      - 'apps/desktop/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/*.sh'
+      - '.github/workflows/build-linux-client.yml'
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/*.sh'
+      - '.github/workflows/build-linux-client.yml'
+
+jobs:
+  linux-client:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config pulseaudio-utils \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust Build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test server crates
+        run: cargo test -p lan_audio_protocol -p lan_audio_server
+
+      - name: Build headless server
+        run: cargo build --release -p lan_audio_server --bin desktop_headless
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build desktop bundles (.deb + AppImage)
+        working-directory: apps/desktop/src-tauri
+        run: cargo tauri build --bundles deb,appimage
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/linux
+          cp target/release/desktop_headless dist/linux/lan-audio-headless
+          cp target/release/lan_audio_desktop dist/linux/lan-audio-desktop
+          cp target/release/bundle/deb/*.deb dist/linux/ || true
+          cp target/release/bundle/appimage/*.AppImage dist/linux/ || true
+          ls -la dist/linux
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-client
+          path: dist/linux/*
+          if-no-files-found: error
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/linux/*
