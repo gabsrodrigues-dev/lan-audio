@@ -631,11 +631,12 @@ class SettingsPage extends StatelessWidget {
 
   /// Builds the expandable debug info card with monospace key-value pairs.
   Widget _buildDebugInfoCard() {
-    return Container(
-      decoration: BoxDecoration(
-        color: AudioConsoleColors.bg2,
-        borderRadius: AudioConsoleRadius.card,
-      ),
+    // Material (not a decorated Container) so the ExpansionTile's ListTile
+    // has an ink surface; newer Flutter asserts on ListTile-in-DecoratedBox.
+    return Material(
+      color: AudioConsoleColors.bg2,
+      borderRadius: AudioConsoleRadius.card,
+      clipBehavior: Clip.antiAlias,
       child: Theme(
         data: ThemeData(
           dividerColor: Colors.transparent,
