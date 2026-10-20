@@ -6,6 +6,7 @@
     <title>LAN Audio</title>
     <style>
       :root {
+        color-scheme: dark;
         --bg: #0c0f14;
         --panel: #1e2433;
         --line: rgba(255,255,255,0.09);
@@ -49,6 +50,10 @@
         cursor: pointer;
       }
       .lang-toggle:focus { outline: 1px solid var(--accent); }
+      select option, select optgroup {
+        background: var(--panel);
+        color: var(--text);
+      }
 
       /* Update banner */
       .update-banner {
@@ -216,6 +221,7 @@
       }
       .field select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
       .field select:disabled { opacity: 0.5; cursor: not-allowed; }
+      #audioSourceSelect { max-width: 72%; min-width: 0; text-overflow: ellipsis; }
       .field-toggle {
         display: flex;
         align-items: center;
@@ -512,9 +518,14 @@
         <div class="field">
           <span id="audioSourceLabel">音频源</span>
           <select id="audioSourceSelect">
-            <option value="windows_loopback" data-i18n="loopback">系统音频</option>
+            <option value="system_loopback" data-i18n="loopback">系统音频</option>
             <option value="synthetic" data-i18n="synthetic">测试音</option>
           </select>
+        </div>
+        <div id="audioOutputsControls" style="display:none;margin:4px 0 8px">
+          <button class="copy-btn" id="audioOutputsRefreshBtn" type="button"></button>
+          <div class="muted" id="audioOutputHint" style="margin-top:6px"></div>
+          <div id="audioOutputSignal" style="margin-top:4px;font-size:12px" aria-live="polite"></div>
         </div>
         <div class="field">
           <span id="codecLabelTop">编码</span>
@@ -603,8 +614,16 @@
       const I18N = {
         zh: {
           title: 'LAN Audio',
-          subtitle: 'Windows 系统音频推送到 Android 手机',
+          subtitle: '电脑系统音频推送到 Android 手机 (Windows / Linux)',
           audioSourceLabel: '音频源',
+          outputSourceLabel: '音频输出',
+          defaultOutput: '默认输出（自动）',
+          refreshOutputs: '刷新输出设备',
+          outputHint: '请选择正在播放视频的耳机、扬声器或 HDMI 输出。',
+          outputPlaying: '正在播放',
+          outputUnavailable: '设备不可用',
+          outputSignal: '检测到音频',
+          outputSilent: '未检测到音频 — 请检查视频使用的输出设备',
           codecLabelTop: '编码',
           loopback: '系统音频',
           synthetic: '测试音',
@@ -665,6 +684,8 @@
           session_error: '服务异常',
           session_stopped: '服务未启动',
           source_windows_loopback: '系统音频',
+          source_linux_loopback: '系统音频 (Linux)',
+          source_system_loopback: '系统音频',
           source_synthetic: '测试音',
           data_plane_legacy_las1: 'Legacy LAS1',
           data_plane_v2_header: 'V2 Header',
@@ -716,8 +737,16 @@
         },
         en: {
           title: 'LAN Audio',
-          subtitle: 'Stream Windows system audio to Android devices',
+          subtitle: 'Stream PC system audio (Windows / Linux) to Android devices',
           audioSourceLabel: 'Audio Source',
+          outputSourceLabel: 'Audio output',
+          defaultOutput: 'Default output (automatic)',
+          refreshOutputs: 'Refresh outputs',
+          outputHint: 'Choose the headphones, speakers or HDMI output used by your video.',
+          outputPlaying: 'Playing',
+          outputUnavailable: 'Unavailable',
+          outputSignal: 'Audio detected',
+          outputSilent: 'No audio detected — check which output your video uses',
           codecLabelTop: 'Codec',
           loopback: 'System Audio',
           synthetic: 'Test Tone',
@@ -778,6 +807,8 @@
           session_error: 'Service error',
           session_stopped: 'Service not started',
           source_windows_loopback: 'System Audio',
+          source_linux_loopback: 'System Audio (Linux)',
+          source_system_loopback: 'System Audio',
           source_synthetic: 'Test Tone',
           data_plane_legacy_las1: 'Legacy LAS1',
           data_plane_v2_header: 'V2 Header',
@@ -836,6 +867,9 @@
         adbDevices: [],
         lastAdbRefreshAt: 0,
         qrKey: '',
+        audioOutputs: [],
+        audioOutputsError: '',
+        lastAudioOutputsRefreshAt: 0,
       };
 
       function t(key) {
@@ -893,7 +927,8 @@
           'Windows 防火墙放行步骤 / Windows Firewall steps:\n' +
           '1. 打开 Windows Defender 防火墙 / Open Windows Defender Firewall\n' +
           '2. 入站规则 -> 新建规则 / Inbound Rules -> New Rule\n' +
-          '3. 端口 39991, TCP+UDP, 允许连接 / Allow TCP+UDP port 39991';
+          '3. 端口 39991, TCP+UDP, 允许连接 / Allow TCP+UDP port 39991\n' +
+          'Linux (ufw): sudo ufw allow 39990:39992/udp && sudo ufw allow 39991/tcp && sudo ufw allow 7878:7879/tcp';
         if (message.includes('connection refused') || message.includes('econnrefused') || message.includes('refused')) {
           return {
             title: state.lang === 'zh'
@@ -916,8 +951,8 @@
               ? '版本不兼容, 请检查双端版本号'
               : 'Version mismatch. Check both app versions',
             body:
-              '确认 Windows 与 Android 都是同一发布版本。\n' +
-              'Make sure Windows and Android are running the same LAN Audio release.',
+              '确认电脑与 Android 都是同一发布版本。\n' +
+              'Make sure the PC and Android are running the same LAN Audio release.',
           };
         }
         return null;
@@ -1104,6 +1139,7 @@
 
       function renderSnapshot(snapshot) {
         state.snapshot = snapshot;
+        renderAudioOutputs(snapshot);
         const runtime = runtimeSnapshot(snapshot);
         const runtimeMetrics = runtime.metrics || {};
         const main = getMainAction(snapshot);
@@ -1133,15 +1169,21 @@
 
         // Settings <select> reflect current snapshot
         const sourceSelect = document.getElementById('audioSourceSelect');
-        if (sourceSelect.value !== snapshot.audio_source) {
-          sourceSelect.value = snapshot.audio_source;
+        const sourceValue = snapshot.audio_source === 'synthetic' ? 'synthetic'
+          : snapshot.audio_outputs_supported && snapshot.audio_output_source ? `output:${snapshot.audio_output_source}`
+          : /_loopback$/.test(snapshot.audio_source) ? 'system_loopback' : snapshot.audio_source;
+        if (!state.busy && document.activeElement !== sourceSelect && sourceSelect.value !== sourceValue) {
+          sourceSelect.value = sourceValue;
         }
+        sourceSelect.title = sourceSelect.selectedOptions[0]?.textContent || '';
         const codecSelect = document.getElementById('codecSelect');
-        if (codecSelect.value !== snapshot.codec_selection) {
+        if (!state.busy && document.activeElement !== codecSelect && codecSelect.value !== snapshot.codec_selection) {
           codecSelect.value = snapshot.codec_selection;
         }
-        document.getElementById('fallbackToggle').checked = !!snapshot.fallback_to_synthetic;
-        document.getElementById('dumpToggle').checked = !!snapshot.capture_dump_wav;
+        if (!state.busy) {
+          document.getElementById('fallbackToggle').checked = !!snapshot.fallback_to_synthetic;
+          document.getElementById('dumpToggle').checked = !!snapshot.capture_dump_wav;
+        }
 
         // Safe mode button
         const isSafeMode = runtime.rollback_state === 'forced_legacy_las1_pcm16'
@@ -1277,6 +1319,7 @@
         // Disable controls during busy
         const disabled = state.busy;
         document.getElementById('audioSourceSelect').disabled = disabled;
+        document.getElementById('audioOutputsRefreshBtn').disabled = disabled;
         document.getElementById('codecSelect').disabled = disabled;
         document.getElementById('fallbackToggle').disabled = disabled;
         document.getElementById('dumpToggle').disabled = disabled;
@@ -1311,10 +1354,53 @@
         }
       }
 
+      async function refreshAudioOutputs(force = false) {
+        if (!force && Date.now() - state.lastAudioOutputsRefreshAt < 10000) return;
+        state.lastAudioOutputsRefreshAt = Date.now();
+        try {
+          state.audioOutputs = await tauriInvoke('list_audio_outputs');
+          state.audioOutputsError = '';
+        } catch (error) {
+          state.audioOutputsError = String(error);
+        }
+      }
+
+      function renderAudioOutputs(snapshot) {
+        const controls = document.getElementById('audioOutputsControls');
+        controls.style.display = snapshot.audio_outputs_supported ? 'block' : 'none';
+        if (!snapshot.audio_outputs_supported) return;
+        document.getElementById('audioSourceLabel').textContent = t('outputSourceLabel');
+        document.getElementById('audioOutputsRefreshBtn').textContent = t('refreshOutputs');
+        document.getElementById('audioOutputHint').textContent = state.audioOutputsError || t('outputHint');
+        const signal = document.getElementById('audioOutputSignal');
+        const hasAudio = (snapshot.metrics?.capture_last_rms || 0) > 0.00001;
+        const capturing = snapshot.service_status === 'running' && snapshot.audio_source !== 'synthetic';
+        signal.textContent = capturing ? t(hasAudio ? 'outputSignal' : 'outputSilent') : '';
+        signal.style.color = hasAudio ? 'var(--accent)' : 'var(--warn)';
+        const select = document.getElementById('audioSourceSelect');
+        if (state.busy || document.activeElement === select) return;
+        const defaultDevice = state.audioOutputs.find(output => output.is_default);
+        const options = [{ value: 'system_loopback', label: t('defaultOutput') + (defaultDevice ? `: ${defaultDevice.label}` : '') }];
+        for (const output of state.audioOutputs) {
+          options.push({ value: `output:${output.source_name}`, label: output.label + (output.is_playing ? ` (${t('outputPlaying')})` : '') });
+        }
+        const selected = snapshot.audio_output_source;
+        if (selected && !state.audioOutputs.some(output => output.source_name === selected)) {
+          options.push({ value: `output:${selected}`, label: `${t('outputUnavailable')}: ${selected}` });
+        }
+        options.push({ value: 'synthetic', label: t('synthetic') });
+        const key = JSON.stringify(options);
+        if (select.dataset.outputsKey !== key) {
+          select.replaceChildren(...options.map(output => new Option(output.label, output.value)));
+          select.dataset.outputsKey = key;
+        }
+      }
+
       async function refresh() {
         try {
           await refreshAdbDevices();
           const snapshot = await tauriInvoke('get_desktop_snapshot');
+          if (snapshot.audio_outputs_supported) await refreshAudioOutputs();
           renderSnapshot(snapshot);
         } catch (error) {
           setErrorText(String(error));
@@ -1339,12 +1425,15 @@
 
       async function applySettings(overrides = {}) {
         if (!state.snapshot) return;
-        const audioSource = overrides.audio_source ?? document.getElementById('audioSourceSelect').value;
+        const sourceChoice = overrides.audio_source ?? document.getElementById('audioSourceSelect').value;
+        const outputSource = sourceChoice.startsWith('output:') ? sourceChoice.slice(7) : null;
+        const audioSource = outputSource ? 'system_loopback' : sourceChoice;
         const codec = overrides.codec_selection ?? document.getElementById('codecSelect').value;
         const dataPlane = overrides.data_plane_format ?? deriveDataPlaneFromCodec(codec);
         await call('update_service_settings', {
           settings: {
             audio_source: audioSource,
+            audio_output_source: outputSource,
             data_plane_format: dataPlane,
             codec_selection: codec,
             allow_loopback_v2_header_gray: false,
@@ -1425,7 +1514,11 @@
 
         // Select-driven settings (data plane derived from codec)
         document.getElementById('audioSourceSelect').addEventListener('change', (e) => {
-          applySettings({ audio_source: e.target.value });
+          applySettings({ audio_source: e.target.value }).catch(error => setErrorText(String(error)));
+        });
+        document.getElementById('audioOutputsRefreshBtn').addEventListener('click', async () => {
+          await refreshAudioOutputs(true);
+          if (state.snapshot) renderSnapshot(state.snapshot);
         });
         document.getElementById('codecSelect').addEventListener('change', (e) => {
           const codec = e.target.value;

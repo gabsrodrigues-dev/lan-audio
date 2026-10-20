@@ -1,3 +1,4 @@
+use anyhow::Context;
 use lan_audio_protocol::{AudioMode, DataPlanePath};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -176,11 +177,11 @@ impl LanAudioService {
                 run_mdns_registration(mdns_cfg, mdns_rx).await
             }));
         }
-        {
+        let mut transport_handle = {
             let transport = transport.clone();
             let rx = self.shutdown_tx.subscribe();
-            handles.push(tokio::spawn(async move { transport.run(rx).await }));
-        }
+            tokio::spawn(async move { transport.run(rx).await })
+        };
         {
             let rx = self.shutdown_tx.subscribe();
             handles.push(tokio::spawn(async move { session_server.run(rx).await }));
@@ -227,15 +228,24 @@ impl LanAudioService {
         info!("lan audio service started");
 
         let mut external_stop_rx = self.shutdown_tx.subscribe();
-        tokio::select! {
+        // A failed capture/transport must stop the service and reach the UI.
+        // Otherwise clients can connect indefinitely to a server sending no audio.
+        let transport_result = tokio::select! {
+            result = &mut transport_handle => Some(result),
             _ = tokio::signal::ctrl_c() => {
                 info!("ctrl_c received, shutting down");
+                None
             }
             _ = external_stop_rx.recv() => {
                 info!("received stop signal, shutting down");
+                None
             }
-        }
+        };
         let _ = self.shutdown_tx.send(());
+        let transport_result = match transport_result {
+            Some(result) => result,
+            None => transport_handle.await,
+        };
 
         for h in handles {
             match h.await {
@@ -244,7 +254,7 @@ impl LanAudioService {
                 Err(err) => warn!(error = %err, "join error"),
             }
         }
-        Ok(())
+        transport_result.context("audio transport task failed")?
     }
 
     pub fn stop(&self) {

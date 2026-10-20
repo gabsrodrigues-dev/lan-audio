@@ -1,37 +1,50 @@
 {
-    "productName":  "LAN Audio",
-    "version":  "1.15.0",
-    "identifier":  "com.example.lanaudio.desktop",
-    "build":  {
-                  "beforeDevCommand":  "",
-                  "beforeBuildCommand":  "",
-                  "frontendDist":  "../web"
-              },
-    "app":  {
-                "withGlobalTauri":  true,
-                "windows":  [
-                                {
-                                    "label":  "main",
-                                    "title":  "LAN Audio",
-                                    "width":  480,
-                                    "height":  580,
-                                    "minWidth":  400,
-                                    "minHeight":  500,
-                                    "resizable":  true,
-                                    "center":  true,
-                                    "visible":  true,
-                                    "decorations":  true
-                                }
-                            ],
-                "security":  {
-                                 "csp":  null
-                             }
-            },
-    "bundle":  {
-                   "active":  true,
-                   "targets":  "all",
-                   "icon":  [
-                                "icons/icon.ico"
-                            ]
-               }
+  "productName": "LAN Audio",
+  "version": "1.15.0",
+  "identifier": "com.example.lanaudio.desktop",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../web"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "LAN Audio",
+        "theme": "Dark",
+        "width": 480,
+        "height": 580,
+        "minWidth": 400,
+        "minHeight": 500,
+        "resizable": true,
+        "center": true,
+        "visible": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "pulseaudio-utils",
+          "libayatana-appindicator3-1"
+        ]
+      }
+    }
+  }
 }

@@ -11,6 +11,8 @@
 //! - `SyntheticAudioSource` is production-ready for MVP debug flow.
 //! - `WindowsLoopbackCapture` has a real initialization/read attempt path on Windows,
 //!   but still requires more real-machine validation and format/clock hardening.
+//! - `LinuxLoopbackCapture` records the default sink monitor via `parec`
+//!   (PulseAudio / PipeWire).
 
 use std::f32::consts::PI;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -19,6 +21,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tokio::time::{sleep_until, Instant};
 
+pub mod output_devices;
 pub mod pcm_accumulator;
 
 #[cfg(target_os = "windows")]
@@ -31,6 +34,11 @@ mod windows_loopback_impl;
 use pcm_accumulator::compute_peak_rms;
 pub use pcm_accumulator::PacketKind;
 pub use windows_loopback_impl::WindowsLoopbackCapture;
+
+#[cfg(target_os = "linux")]
+pub mod linux_loopback;
+#[cfg(target_os = "linux")]
+pub use linux_loopback::LinuxLoopbackCapture;
 
 #[derive(Debug, Clone)]
 pub struct CaptureDebugDumpConfig {

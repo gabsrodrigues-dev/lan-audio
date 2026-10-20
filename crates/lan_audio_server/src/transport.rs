@@ -1219,23 +1219,25 @@ impl UdpTransport {
                 let source = self.build_synthetic_source();
                 Ok((source, "synthetic".to_string()))
             }
-            AudioSourceKind::WindowsLoopback => match self.build_windows_loopback_source() {
-                Ok(source) => Ok((source, "windows_loopback".to_string())),
-                Err(err) => {
-                    if self.cfg.audio_source_fallback_to_synthetic {
-                        warn!(
-                            error = %err,
-                            "windows_loopback init failed, fallback to synthetic"
-                        );
-                        Ok((
-                            self.build_synthetic_source(),
-                            "synthetic(fallback)".to_string(),
-                        ))
-                    } else {
-                        Err(err)
+            AudioSourceKind::WindowsLoopback | AudioSourceKind::LinuxLoopback => {
+                match self.build_system_loopback_source() {
+                    Ok((source, name)) => Ok((source, name)),
+                    Err(err) => {
+                        if self.cfg.audio_source_fallback_to_synthetic {
+                            warn!(
+                                error = %err,
+                                "system loopback init failed, fallback to synthetic"
+                            );
+                            Ok((
+                                self.build_synthetic_source(),
+                                "synthetic(fallback)".to_string(),
+                            ))
+                        } else {
+                            Err(err)
+                        }
                     }
                 }
-            },
+            }
         }
     }
 
@@ -1260,6 +1262,61 @@ impl UdpTransport {
         }
     }
 
+    /// Builds the native loopback capture for the host OS. `windows_loopback`
+    /// and `linux_loopback` are treated as "system audio" so existing
+    /// configs/UI values keep working on either platform.
+    fn build_system_loopback_source(
+        &self,
+    ) -> anyhow::Result<(Box<dyn AudioCaptureSource>, String)> {
+        #[cfg(target_os = "linux")]
+        {
+            if self.cfg.audio_source == AudioSourceKind::WindowsLoopback {
+                info!("windows_loopback requested on Linux, using linux_loopback (parec)");
+            }
+            return Ok((
+                self.build_linux_loopback_source()?,
+                "linux_loopback".to_string(),
+            ));
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok((
+                self.build_windows_loopback_source()?,
+                "windows_loopback".to_string(),
+            ))
+        }
+    }
+
+    fn loopback_format(&self) -> AudioFormat {
+        let frame_duration_ms = if self.cfg.current_audio_mode == AudioMode::UltraLowLatency {
+            5
+        } else {
+            10
+        };
+        AudioFormat {
+            sample_rate_hz: self.cfg.sample_rate,
+            channels: self.cfg.channels as u16,
+            frame_duration_ms,
+            ..AudioFormat::default()
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn build_linux_loopback_source(&self) -> anyhow::Result<Box<dyn AudioCaptureSource>> {
+        let source = crate::audio_capture::LinuxLoopbackCapture::new_output(
+            self.loopback_format(),
+            CaptureDebugDumpConfig {
+                enabled: self.cfg.capture_debug_dump_wav,
+                seconds: self.cfg.capture_debug_dump_seconds,
+                output_dir: self.cfg.capture_debug_dump_dir.clone(),
+            },
+            self.cfg.audio_output_source.as_deref(),
+        )
+        .map_err(|err: CaptureError| anyhow!(err.to_string()))?;
+        Ok(Box::new(source))
+    }
+
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     fn build_windows_loopback_source(&self) -> anyhow::Result<Box<dyn AudioCaptureSource>> {
         let frame_duration_ms = if self.cfg.current_audio_mode == AudioMode::UltraLowLatency {
             5
@@ -2211,6 +2268,7 @@ fn select_data_plane_format(
     match audio_source {
         AudioSourceKind::Synthetic => desired,
         AudioSourceKind::WindowsLoopback => desired,
+        AudioSourceKind::LinuxLoopback => desired,
     }
 }
 

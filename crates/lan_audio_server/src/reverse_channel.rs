@@ -206,7 +206,36 @@ async fn handle_audio_client(
     let mut pcm_buf = vec![0i16; 480 * 120]; // 120ms of mono 48kHz PCM
 
     // Open named pipe for virtual audio device
+    #[cfg(windows)]
     let pipe_path = r"\\.\pipe\lan_audio_reverse_mic";
+
+    // On Linux, expose the phone mic as a PulseAudio/PipeWire virtual source
+    // ("LAN Audio Mic") fed through `pacat`.
+    #[cfg(target_os = "linux")]
+    let mut linux_mic = match linux_virtual_mic::LinuxVirtualMic::open() {
+        Ok(mic) => {
+            info!(
+                "Reverse mic available as PulseAudio source `{}`",
+                linux_virtual_mic::SOURCE_NAME
+            );
+            if let Ok(mut s) = state.lock() {
+                s.virtual_device_detected = true;
+                s.virtual_device_warning = None;
+                s.mic_device_name = "LAN Audio Mic".into();
+            }
+            Some(mic)
+        }
+        Err(e) => {
+            warn!("Could not create Linux virtual mic: {e}");
+            if let Ok(mut s) = state.lock() {
+                s.virtual_device_detected = false;
+                s.virtual_device_warning = Some(format!(
+                    "Linux virtual mic unavailable ({e}). Install pulseaudio-utils (pactl/pacat)."
+                ));
+            }
+            None
+        }
+    };
 
     #[cfg(windows)]
     let mut named_pipe: Option<std::fs::File> = {
@@ -284,6 +313,16 @@ async fn handle_audio_client(
 
                         // Write to named pipe using bytemuck for safe transmute to bytes
                         let pcm_bytes: &[u8] = bytemuck::cast_slice(&pcm_buf[..samples]);
+
+                        #[cfg(target_os = "linux")]
+                        if let Some(mic) = linux_mic.as_mut() {
+                            if let Err(e) = mic.write(pcm_bytes) {
+                                warn!("Linux virtual mic write failed: {e}");
+                                linux_mic = None;
+                            }
+                        }
+                        #[cfg(not(any(windows, target_os = "linux")))]
+                        let _ = pcm_bytes;
 
                         #[cfg(windows)]
                         if let Some(ref mut pipe) = named_pipe {
@@ -471,4 +510,127 @@ async fn handle_control_stream(
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+mod linux_virtual_mic {
+    //! Phone-mic → Linux virtual microphone bridge.
+    //!
+    //! Creates a null sink (`lan_audio_mic_sink`) plus a remapped source
+    //! (`lan_audio_mic`, shown as "LAN Audio Mic") with `pactl`, then pipes
+    //! decoded 48 kHz mono s16le PCM into the sink through `pacat`. Apps then
+    //! pick "LAN Audio Mic" as their input. Modules are unloaded on drop.
+    use std::io::Write;
+    use std::process::{Child, ChildStdin, Command, Stdio};
+
+    pub const SINK_NAME: &str = "lan_audio_mic_sink";
+    pub const SOURCE_NAME: &str = "lan_audio_mic";
+
+    pub struct LinuxVirtualMic {
+        modules: Vec<String>,
+        child: Child,
+        stdin: ChildStdin,
+    }
+
+    fn pactl(args: &[&str]) -> anyhow::Result<String> {
+        let out = Command::new("pactl")
+            .args(args)
+            .stderr(Stdio::piped())
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "pactl {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    fn exists(kind: &str, name: &str) -> bool {
+        pactl(&["list", "short", kind])
+            .map(|list| {
+                list.lines()
+                    .any(|l| l.split_whitespace().nth(1) == Some(name))
+            })
+            .unwrap_or(false)
+    }
+
+    impl LinuxVirtualMic {
+        pub fn open() -> anyhow::Result<Self> {
+            let mut modules = Vec::new();
+            if !exists("sinks", SINK_NAME) {
+                modules.push(pactl(&[
+                    "load-module",
+                    "module-null-sink",
+                    &format!("sink_name={SINK_NAME}"),
+                    "rate=48000",
+                    "channels=1",
+                    "sink_properties=device.description=LAN_Audio_Mic_Sink",
+                ])?);
+            }
+            if !exists("sources", SOURCE_NAME) {
+                match pactl(&[
+                    "load-module",
+                    "module-remap-source",
+                    &format!("master={SINK_NAME}.monitor"),
+                    &format!("source_name={SOURCE_NAME}"),
+                    "source_properties=device.description=LAN_Audio_Mic",
+                ]) {
+                    Ok(id) => modules.push(id),
+                    Err(e) => {
+                        for m in &modules {
+                            let _ = pactl(&["unload-module", m]);
+                        }
+                        return Err(e);
+                    }
+                }
+            }
+            let mut child = Command::new("pacat")
+                .args([
+                    "--playback",
+                    "--raw",
+                    "--format=s16le",
+                    "--rate=48000",
+                    "--channels=1",
+                    "--latency-msec=20",
+                    "--client-name=LAN Audio",
+                    "--stream-name=LAN Audio phone mic",
+                    &format!("--device={SINK_NAME}"),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| {
+                    for m in &modules {
+                        let _ = pactl(&["unload-module", m]);
+                    }
+                    anyhow::anyhow!("spawn pacat: {e}")
+                })?;
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("pacat stdin unavailable"))?;
+            Ok(Self {
+                modules,
+                child,
+                stdin,
+            })
+        }
+
+        pub fn write(&mut self, pcm: &[u8]) -> std::io::Result<()> {
+            self.stdin.write_all(pcm)
+        }
+    }
+
+    impl Drop for LinuxVirtualMic {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            for m in self.modules.iter().rev() {
+                let _ = pactl(&["unload-module", m]);
+            }
+        }
+    }
 }

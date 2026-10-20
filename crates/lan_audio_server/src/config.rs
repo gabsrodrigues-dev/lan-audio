@@ -8,13 +8,26 @@ use lan_audio_protocol::{DISCOVERY_PORT, UDP_AUDIO_PORT, WS_PORT};
 pub enum AudioSourceKind {
     Synthetic,
     WindowsLoopback,
+    /// PulseAudio/PipeWire default-sink monitor capture via `parec`.
+    LinuxLoopback,
 }
 
 impl AudioSourceKind {
+    /// The native "what you hear" loopback source for the current OS.
+    pub fn system_loopback() -> Self {
+        if cfg!(target_os = "linux") {
+            Self::LinuxLoopback
+        } else {
+            Self::WindowsLoopback
+        }
+    }
+
     pub fn parse(input: &str) -> Result<Self> {
         match input {
             "synthetic" => Ok(Self::Synthetic),
             "windows_loopback" => Ok(Self::WindowsLoopback),
+            "linux_loopback" => Ok(Self::LinuxLoopback),
+            "system_loopback" | "loopback" => Ok(Self::system_loopback()),
             other => Err(anyhow!("unsupported audio source: {other}")),
         }
     }
@@ -23,6 +36,7 @@ impl AudioSourceKind {
         match self {
             Self::Synthetic => "synthetic",
             Self::WindowsLoopback => "windows_loopback",
+            Self::LinuxLoopback => "linux_loopback",
         }
     }
 }
@@ -148,6 +162,8 @@ pub struct ServerConfig {
     pub frames_per_packet: u16,
     pub packet_interval_ms: u64,
     pub audio_source: AudioSourceKind,
+    /// Exact PulseAudio monitor chosen by the user; None follows the default output.
+    pub audio_output_source: Option<String>,
     pub audio_source_fallback_to_synthetic: bool,
     pub synthetic_signal: SyntheticSignalKind,
     pub synthetic_frequency_hz: f32,
@@ -181,7 +197,8 @@ impl Default for ServerConfig {
             channels: 2,
             frames_per_packet: 480,
             packet_interval_ms: 10,
-            audio_source: AudioSourceKind::WindowsLoopback,
+            audio_source: AudioSourceKind::system_loopback(),
+            audio_output_source: None,
             audio_source_fallback_to_synthetic: true,
             synthetic_signal: SyntheticSignalKind::Sine,
             synthetic_frequency_hz: 440.0,
@@ -230,6 +247,12 @@ impl ServerConfig {
                         .next()
                         .ok_or_else(|| anyhow!("missing value for --audio-source"))?;
                     self.audio_source = AudioSourceKind::parse(&value)?;
+                }
+                "--audio-output-source" => {
+                    self.audio_output_source = Some(
+                        iter.next()
+                            .ok_or_else(|| anyhow!("missing value for --audio-output-source"))?,
+                    );
                 }
                 "--synthetic-signal" => {
                     let value = iter
@@ -341,13 +364,15 @@ pub fn select_data_plane_format(
     match audio_source {
         AudioSourceKind::Synthetic => desired,
         AudioSourceKind::WindowsLoopback => desired,
+        AudioSourceKind::LinuxLoopback => desired,
     }
 }
 
 fn whoami_fallback() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "windows-desktop".to_string())
+        .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|h| h.trim().to_string()))
+        .unwrap_or_else(|_| "lan-audio-desktop".to_string())
 }
 
 #[cfg(test)]

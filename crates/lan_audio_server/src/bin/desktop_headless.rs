@@ -14,19 +14,20 @@ fn print_help() {
 desktop_headless
 
 Recommended default path:
-  --audio-source windows_loopback --data-plane v2_header --codec opus
+  --audio-source system_loopback --data-plane v2_header --codec opus
 
 USB mode:
   --transport usb --adb-serial <serial>
 
 Rollback path:
-  --audio-source windows_loopback --data-plane legacy_las1 --codec pcm16
+  --audio-source system_loopback --data-plane legacy_las1 --codec pcm16
 
 Force rollback (overrides data-plane and codec to legacy_las1+pcm16):
   --force-rollback
 
 Common options:
-  --audio-source <windows_loopback|synthetic>
+  --audio-source <system_loopback|windows_loopback|linux_loopback|synthetic>
+  --audio-output-source <PulseAudio monitor source name>
   --data-plane <v2_header|legacy_las1>
   --codec <opus|pcm16>
   --transport <wifi|usb>
