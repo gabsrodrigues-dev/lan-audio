@@ -162,6 +162,8 @@ pub struct ServerConfig {
     pub frames_per_packet: u16,
     pub packet_interval_ms: u64,
     pub audio_source: AudioSourceKind,
+    /// Exact PulseAudio monitor chosen by the user; None follows the default output.
+    pub audio_output_source: Option<String>,
     pub audio_source_fallback_to_synthetic: bool,
     pub synthetic_signal: SyntheticSignalKind,
     pub synthetic_frequency_hz: f32,
@@ -196,6 +198,7 @@ impl Default for ServerConfig {
             frames_per_packet: 480,
             packet_interval_ms: 10,
             audio_source: AudioSourceKind::system_loopback(),
+            audio_output_source: None,
             audio_source_fallback_to_synthetic: true,
             synthetic_signal: SyntheticSignalKind::Sine,
             synthetic_frequency_hz: 440.0,
@@ -244,6 +247,12 @@ impl ServerConfig {
                         .next()
                         .ok_or_else(|| anyhow!("missing value for --audio-source"))?;
                     self.audio_source = AudioSourceKind::parse(&value)?;
+                }
+                "--audio-output-source" => {
+                    self.audio_output_source = Some(
+                        iter.next()
+                            .ok_or_else(|| anyhow!("missing value for --audio-output-source"))?,
+                    );
                 }
                 "--synthetic-signal" => {
                     let value = iter

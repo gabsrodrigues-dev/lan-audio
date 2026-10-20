@@ -142,18 +142,82 @@ fn now_ms() -> u64 {
 
 pub type SharedDiscoveryConfig = Arc<DiscoveryConfig>;
 
-fn local_ipv4_addrs() -> Vec<IpAddr> {
-    get_if_addrs()
-        .map(|interfaces| {
-            interfaces
-                .into_iter()
-                .filter_map(|iface| match iface.addr {
-                    IfAddr::V4(v4) if !v4.ip.is_loopback() => Some(IpAddr::V4(v4.ip)),
-                    _ => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// LAN endpoints must not use VPN or container addresses for phone connections.
+pub fn local_ipv4_addrs() -> Vec<IpAddr> {
+    let mut interfaces = get_if_addrs().unwrap_or_default();
+    interfaces.retain(|iface| {
+        matches!(&iface.addr, IfAddr::V4(v4) if !v4.ip.is_loopback() && !v4.ip.is_unspecified())
+            && is_lan_interface_name(&iface.name)
+            && interface_is_active(&iface.name)
+    });
+    // Hardware adapters precede software bridges and VPN-routed defaults.
+    interfaces.sort_by_key(|iface| !is_hardware_interface(&iface.name));
+    interfaces.into_iter().map(|iface| iface.ip()).collect()
+}
+
+fn is_lan_interface_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    ![
+        "docker",
+        "veth",
+        "br-",
+        "virbr",
+        "mpqemubr",
+        "tun",
+        "tap",
+        "wg",
+        "utun",
+        "tailscale",
+        "vmnet",
+        "vboxnet",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+        && !name.contains("warp")
+        && !name.contains("vpn")
+}
+
+fn interface_is_active(name: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return std::fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+            .map(|state| state.trim() != "down")
+            .unwrap_or(true);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = name;
+        true
+    }
+}
+
+fn is_hardware_interface(name: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        return std::path::Path::new("/sys/class/net")
+            .join(name)
+            .join("device")
+            .exists();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = name;
+        true
+    }
+}
+
+pub fn preferred_lan_ip() -> Option<IpAddr> {
+    let addresses = local_ipv4_addrs();
+    // Keep normal OS routing preferences when the routed endpoint is on LAN.
+    let routed = std::net::UdpSocket::bind("0.0.0.0:0")
+        .ok()
+        .and_then(|socket| {
+            socket.connect("8.8.8.8:80").ok()?;
+            Some(socket.local_addr().ok()?.ip())
+        });
+    routed
+        .filter(|ip| addresses.contains(ip))
+        .or_else(|| addresses.into_iter().next())
 }
 
 fn mdns_instance_name(server_name: &str) -> String {
@@ -198,6 +262,9 @@ fn discovery_targets(default_target: SocketAddr) -> Vec<SocketAddr> {
             if v4.ip.is_loopback() {
                 continue;
             }
+            if !is_lan_interface_name(&iface.name) || !interface_is_active(&iface.name) {
+                continue;
+            }
             let broadcast = v4
                 .broadcast
                 .unwrap_or_else(|| directed_broadcast(v4.ip, v4.netmask));
@@ -219,6 +286,25 @@ fn directed_broadcast(ip: Ipv4Addr, netmask: Ipv4Addr) -> Ipv4Addr {
 mod tests {
     use super::{directed_broadcast, mdns_host_name, mdns_instance_name};
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn phone_endpoints_exclude_vpn_and_container_interfaces() {
+        for name in [
+            "CloudflareWARP",
+            "docker0",
+            "docker_gwbridge",
+            "br-a123",
+            "veth123",
+            "mpqemubrzone1",
+            "tun0",
+            "tailscale0",
+        ] {
+            assert!(!super::is_lan_interface_name(name), "{name}");
+        }
+        for name in ["eno1", "wlan0", "enp4s0", "Wi-Fi", "Ethernet", "br0"] {
+            assert!(super::is_lan_interface_name(name), "{name}");
+        }
+    }
 
     #[test]
     fn directed_broadcast_uses_ip_and_mask() {

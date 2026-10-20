@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tokio::time::{sleep_until, Instant};
 
+pub mod output_devices;
 pub mod pcm_accumulator;
 
 #[cfg(target_os = "windows")]

@@ -1303,13 +1303,14 @@ impl UdpTransport {
 
     #[cfg(target_os = "linux")]
     fn build_linux_loopback_source(&self) -> anyhow::Result<Box<dyn AudioCaptureSource>> {
-        let source = crate::audio_capture::LinuxLoopbackCapture::new_default_output(
+        let source = crate::audio_capture::LinuxLoopbackCapture::new_output(
             self.loopback_format(),
             CaptureDebugDumpConfig {
                 enabled: self.cfg.capture_debug_dump_wav,
                 seconds: self.cfg.capture_debug_dump_seconds,
                 output_dir: self.cfg.capture_debug_dump_dir.clone(),
             },
+            self.cfg.audio_output_source.as_deref(),
         )
         .map_err(|err: CaptureError| anyhow!(err.to_string()))?;
         Ok(Box::new(source))

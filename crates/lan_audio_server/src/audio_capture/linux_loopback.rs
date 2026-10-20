@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-use tokio::time::{timeout_at, Instant};
+use tokio::time::{sleep_until, timeout, timeout_at, Instant};
 use tracing::{debug, info, warn};
 
 use super::pcm_accumulator::PcmFrameAccumulator;
@@ -39,6 +39,8 @@ const CHANNEL_CAPACITY: usize = 32;
 /// If the accumulator holds more than this many frames, the oldest audio is
 /// dropped to keep end-to-end latency bounded.
 const MAX_BUFFERED_FRAMES: usize = 8;
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const RETRY_DELAY: Duration = Duration::from_secs(1);
 
 pub const DEFAULT_LINUX_SOURCE: &str = "@DEFAULT_MONITOR@";
 
@@ -51,6 +53,7 @@ pub struct LinuxLoopbackCapture {
     rx: Option<mpsc::Receiver<Vec<f32>>>,
     accumulator: PcmFrameAccumulator,
     device_name: Option<String>,
+    retry_at: Instant,
 }
 
 impl std::fmt::Debug for LinuxLoopbackCapture {
@@ -66,10 +69,21 @@ impl LinuxLoopbackCapture {
     /// Captures the monitor of the default output sink.
     pub fn new_default_output(
         format: AudioFormat,
-        _debug_cfg: CaptureDebugDumpConfig,
+        debug_cfg: CaptureDebugDumpConfig,
     ) -> Result<Self, CaptureError> {
-        let source = std::env::var("LAN_AUDIO_LINUX_SOURCE")
-            .ok()
+        Self::new_output(format, debug_cfg, None)
+    }
+
+    /// An explicit monitor takes precedence over environment/default selection.
+    pub fn new_output(
+        format: AudioFormat,
+        _debug_cfg: CaptureDebugDumpConfig,
+        output_source: Option<&str>,
+    ) -> Result<Self, CaptureError> {
+        let source = output_source
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+            .or_else(|| std::env::var("LAN_AUDIO_LINUX_SOURCE").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_LINUX_SOURCE.to_string());
         let parec_bin = std::env::var("LAN_AUDIO_PAREC")
@@ -77,6 +91,14 @@ impl LinuxLoopbackCapture {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "parec".to_string());
 
+        Self::with_source_and_binary(format, source, parec_bin)
+    }
+
+    fn with_source_and_binary(
+        format: AudioFormat,
+        source: String,
+        parec_bin: String,
+    ) -> Result<Self, CaptureError> {
         // Fail fast (so the service can fall back to synthetic) when the
         // tool is missing instead of failing later inside start().
         let probe = Command::new(&parec_bin)
@@ -100,6 +122,7 @@ impl LinuxLoopbackCapture {
             rx: None,
             accumulator: PcmFrameAccumulator::new(format),
             device_name: None,
+            retry_at: Instant::now(),
         })
     }
 
@@ -145,7 +168,9 @@ impl LinuxLoopbackCapture {
             .stdout
             .take()
             .ok_or_else(|| CaptureError::StartFailed("parec stdout unavailable".into()))?;
-        if let Some(mut stderr) = child.stderr.take() {
+        // Own the process before creating threads, so an error also cleans it up.
+        self.child = Some(child);
+        if let Some(mut stderr) = self.child.as_mut().and_then(|child| child.stderr.take()) {
             std::thread::Builder::new()
                 .name("lan-audio-parec-stderr".into())
                 .spawn(move || {
@@ -199,7 +224,6 @@ impl LinuxLoopbackCapture {
             })
             .map_err(|e| CaptureError::StartFailed(format!("spawn reader thread: {e}")))?;
 
-        self.child = Some(child);
         self.rx = Some(rx);
         Ok(())
     }
@@ -228,16 +252,56 @@ impl LinuxLoopbackCapture {
             let _ = child.wait();
         }
     }
+
+    fn capture_failed(&mut self) {
+        self.kill_child();
+        self.accumulator = PcmFrameAccumulator::new(self.target_format);
+        self.state = CaptureSourceState::Failed;
+        self.retry_at = Instant::now() + RETRY_DELAY;
+    }
+
+    fn stream_ended_error(&mut self) -> CaptureError {
+        let status = self
+            .child
+            .as_mut()
+            .and_then(|child| child.try_wait().ok())
+            .flatten();
+        CaptureError::ReadBufferFailed(format!(
+            "parec stream ended (source={}, status={status:?}); check `pactl info` and \
+             `pactl list short sources`, or set LAN_AUDIO_LINUX_SOURCE to the output monitor",
+            self.source
+        ))
+    }
 }
 
 #[async_trait]
 impl AudioCaptureSource for LinuxLoopbackCapture {
     async fn start(&mut self) -> Result<(), CaptureError> {
+        if self.state == CaptureSourceState::Started {
+            return Ok(());
+        }
         self.device_name = self.resolve_device_name();
         self.state = CaptureSourceState::DeviceResolved;
         if let Err(e) = self.spawn_parec() {
-            self.state = CaptureSourceState::Failed;
+            self.capture_failed();
             return Err(e);
+        }
+        // Spawning successfully does not mean PulseAudio accepted the device.
+        // Wait for PCM (including digital silence), retaining it for read_frame.
+        match timeout(STARTUP_TIMEOUT, self.rx.as_mut().unwrap().recv()).await {
+            Ok(Some(chunk)) => self.push_chunk(chunk),
+            result => {
+                let error = if result.is_err() {
+                    CaptureError::StartFailed(format!(
+                        "no PCM received from parec within {}s (source={}); check the PulseAudio/PipeWire output monitor",
+                        STARTUP_TIMEOUT.as_secs(), self.source
+                    ))
+                } else {
+                    self.stream_ended_error()
+                };
+                self.capture_failed();
+                return Err(error);
+            }
         }
         self.state = CaptureSourceState::Started;
         info!(
@@ -252,6 +316,10 @@ impl AudioCaptureSource for LinuxLoopbackCapture {
     }
 
     async fn read_frame(&mut self) -> Result<AudioFrame, CaptureError> {
+        if self.state == CaptureSourceState::Failed {
+            sleep_until(self.retry_at).await;
+            self.start().await?;
+        }
         if self.state != CaptureSourceState::Started {
             return Err(CaptureError::NotStarted);
         }
@@ -273,11 +341,9 @@ impl AudioCaptureSource for LinuxLoopbackCapture {
                 }
                 Ok(None) => {
                     // parec exited (e.g. audio server restarted).
-                    self.state = CaptureSourceState::Failed;
-                    self.kill_child();
-                    return Err(CaptureError::ReadBufferFailed(
-                        "parec stream ended unexpectedly".into(),
-                    ));
+                    let error = self.stream_ended_error();
+                    self.capture_failed();
+                    return Err(error);
                 }
                 Err(_) => break,
             }
@@ -296,6 +362,7 @@ impl AudioCaptureSource for LinuxLoopbackCapture {
 
     async fn stop(&mut self) -> Result<(), CaptureError> {
         self.kill_child();
+        self.accumulator = PcmFrameAccumulator::new(self.target_format);
         self.state = CaptureSourceState::Stopped;
         Ok(())
     }
@@ -336,17 +403,73 @@ mod tests {
 
     #[test]
     fn missing_parec_binary_is_reported() {
-        std::env::set_var("LAN_AUDIO_PAREC", "/nonexistent/parec-lan-audio-test");
-        let err = LinuxLoopbackCapture::new_default_output(
+        let err = LinuxLoopbackCapture::with_source_and_binary(
             AudioFormat::default(),
-            CaptureDebugDumpConfig {
-                enabled: false,
-                seconds: 1,
-                output_dir: "x".into(),
-            },
+            DEFAULT_LINUX_SOURCE.into(),
+            "/nonexistent/parec-lan-audio-test".into(),
         )
         .expect_err("must fail without parec");
-        std::env::remove_var("LAN_AUDIO_PAREC");
         assert!(matches!(err, CaptureError::DeviceActivationFailed(_)));
+    }
+
+    struct FakeParec(std::path::PathBuf);
+
+    impl FakeParec {
+        fn new(body: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let path =
+                std::env::temp_dir().join(format!("lan-audio-parec-{}", uuid::Uuid::new_v4()));
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\n{body}\n"),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            Self(path)
+        }
+
+        fn capture(&self) -> LinuxLoopbackCapture {
+            LinuxLoopbackCapture::with_source_and_binary(
+                AudioFormat::default(),
+                "test.monitor".into(),
+                self.0.to_str().unwrap().into(),
+            )
+            .unwrap()
+        }
+    }
+
+    impl Drop for FakeParec {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn start_rejects_a_process_that_exits_without_pcm() {
+        let fake = FakeParec::new("exit 42");
+        let mut capture = fake.capture();
+        let error = capture.start().await.unwrap_err();
+        assert!(error.to_string().contains("test.monitor"));
+        assert_eq!(capture.state(), CaptureSourceState::Failed);
+        assert!(capture.child.is_none());
+    }
+
+    #[tokio::test]
+    async fn reads_pcm_and_recovers_after_recorder_exits() {
+        // One stereo 10ms frame of 0.25f32.
+        let pcm = "\\000\\000\\200\\076".repeat(AudioFormat::default().total_samples_per_frame());
+        let fake = FakeParec::new(&format!("printf '{pcm}'"));
+        let mut capture = fake.capture();
+        capture.start().await.unwrap();
+        let frame = capture.read_frame().await.unwrap();
+        assert!(frame.samples_f32.iter().all(|sample| *sample == 0.25));
+        assert!(!frame.is_silence);
+        assert!(capture.read_frame().await.is_err());
+        // The next read reconnects instead of returning NotStarted forever.
+        let frame = capture.read_frame().await.unwrap();
+        assert!(frame.samples_f32.iter().all(|sample| *sample == 0.25));
+        capture.stop().await.unwrap();
+        assert_eq!(capture.accumulator.buffered_samples(), 0);
+        assert_eq!(capture.state(), CaptureSourceState::Stopped);
     }
 }

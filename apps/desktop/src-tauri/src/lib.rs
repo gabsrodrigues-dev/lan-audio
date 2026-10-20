@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fs;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,6 +21,9 @@ use lan_audio_server::config::{
 use lan_audio_server::data_plane::DataPlaneRouter;
 use lan_audio_server::metrics::MetricsSnapshot;
 use lan_audio_server::service::LanAudioService;
+use lan_audio_server::audio_capture::output_devices::{
+    list_audio_outputs as enumerate_audio_outputs, AudioOutputDevice,
+};
 use lan_audio_server::usb_transport::adb_devices;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
@@ -103,6 +106,8 @@ struct DesktopSnapshot {
     error_message: Option<String>,
     service_snapshot: ServiceSnapshot,
     audio_source: String,
+    audio_output_source: Option<String>,
+    audio_outputs_supported: bool,
     data_plane_format: String,
     protocol_path: String,
     gray_mode: bool,
@@ -143,6 +148,7 @@ struct DesktopSnapshot {
 #[derive(Debug, Clone)]
 struct DesktopServiceConfig {
     audio_source: AudioSourceKind,
+    audio_output_source: Option<String>,
     data_plane_format: DataPlaneFormat,
     codec_selection: CodecSelection,
     allow_loopback_v2_header_gray: bool,
@@ -160,6 +166,7 @@ impl Default for DesktopServiceConfig {
         let cfg = ServerConfig::default();
         Self {
             audio_source: cfg.audio_source,
+            audio_output_source: cfg.audio_output_source,
             data_plane_format: cfg.data_plane_format,
             codec_selection: cfg.codec_selection,
             allow_loopback_v2_header_gray: cfg.allow_loopback_v2_header_gray,
@@ -177,6 +184,8 @@ impl Default for DesktopServiceConfig {
 #[derive(Debug, Deserialize)]
 struct ServiceSettingsInput {
     audio_source: String,
+    #[serde(default)]
+    audio_output_source: Option<String>,
     data_plane_format: String,
     codec_selection: String,
     allow_loopback_v2_header_gray: bool,
@@ -349,6 +358,8 @@ fn get_desktop_snapshot(state: State<'_, AppState>) -> DesktopSnapshot {
         error_message: last_error,
         service_snapshot,
         audio_source: cfg.audio_source.as_str().to_string(),
+        audio_output_source: cfg.audio_output_source.clone(),
+        audio_outputs_supported: cfg!(target_os = "linux"),
         data_plane_format: cfg.data_plane_format.as_str().to_string(),
         protocol_path,
         gray_mode,
@@ -588,18 +599,51 @@ fn restart_service(state: State<'_, AppState>) -> Result<DesktopSnapshot, String
 }
 
 #[tauri::command]
+fn list_audio_outputs() -> Result<Vec<AudioOutputDevice>, String> {
+    enumerate_audio_outputs().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn update_service_settings(
+    app: AppHandle,
     state: State<'_, AppState>,
     settings: ServiceSettingsInput,
 ) -> Result<DesktopSnapshot, String> {
     let source = AudioSourceKind::parse(&settings.audio_source).map_err(|e| e.to_string())?;
+    let output_source = settings
+        .audio_output_source
+        .filter(|value| !value.trim().is_empty());
+    if cfg!(target_os = "linux") {
+        if let Some(selected) = output_source.as_deref() {
+            if !enumerate_audio_outputs()
+                .map_err(|error| error.to_string())?
+                .iter()
+                .any(|output| output.source_name == selected)
+            {
+                return Err("The selected audio output is unavailable. Refresh the outputs and choose again.".into());
+            }
+        }
+    }
     let data_plane =
         DataPlaneFormat::parse(&settings.data_plane_format).map_err(|e| e.to_string())?;
     let codec_selection =
         CodecSelection::parse(&settings.codec_selection).map_err(|e| e.to_string())?;
+    if cfg!(target_os = "linux") {
+        let path = app
+            .path()
+            .app_config_dir()
+            .map_err(|error| error.to_string())?;
+        fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+        fs::write(
+            path.join("audio-output.json"),
+            serde_json::to_vec(&output_source).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("Could not save the selected audio output: {error}"))?;
+    }
     let restart_needed = {
         let mut guard = state.inner.lock().expect("state lock");
         guard.config.audio_source = source;
+        guard.config.audio_output_source = output_source;
         guard.config.data_plane_format = data_plane;
         guard.config.codec_selection = codec_selection;
         guard.config.allow_loopback_v2_header_gray = settings.allow_loopback_v2_header_gray;
@@ -739,6 +783,7 @@ fn stop_service_impl(state: &State<'_, AppState>, wait: bool) -> Result<(), Stri
 fn build_server_config(cfg: &DesktopServiceConfig) -> Result<ServerConfig, String> {
     let mut server = ServerConfig::default();
     server.audio_source = cfg.audio_source;
+    server.audio_output_source = cfg.audio_output_source.clone();
     server.data_plane_format = cfg.data_plane_format;
     server.codec_selection = cfg.codec_selection;
     server.allow_loopback_v2_header_gray = cfg.allow_loopback_v2_header_gray;
@@ -864,17 +909,9 @@ fn parse_bind(host: &str, port: u16) -> Result<SocketAddr, String> {
 }
 
 fn detect_local_ip() -> String {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok();
-    if let Some(socket) = socket {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(local) = socket.local_addr() {
-                if let IpAddr::V4(ip) = local.ip() {
-                    return ip.to_string();
-                }
-            }
-        }
-    }
-    "127.0.0.1".to_string()
+    lan_audio_server::discovery::preferred_lan_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
 }
 
 fn empty_metrics(audio_source: &str) -> DesktopMetrics {
@@ -1071,6 +1108,14 @@ pub fn run() {
         })
         .setup(|app| {
             let state = app.state::<AppState>();
+            if cfg!(target_os = "linux") {
+                let path = app.path().app_config_dir()?.join("audio-output.json");
+                if let Ok(bytes) = fs::read(path) {
+                    if let Ok(source) = serde_json::from_slice::<Option<String>>(&bytes) {
+                        state.inner.lock().expect("state lock").config.audio_output_source = source;
+                    }
+                }
+            }
             spawn_silent_startup_update_check(app.handle(), Arc::clone(&state.update_state));
             setup_tray_menu(app)?;
             Ok(())
@@ -1082,6 +1127,7 @@ pub fn run() {
             stop_service,
             restart_service,
             update_service_settings,
+            list_audio_outputs,
             list_adb_devices,
             enable_usb_mode,
             disable_usb_mode,
@@ -1101,6 +1147,18 @@ pub fn run() {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn selected_output_is_forwarded_to_capture_configuration() {
+        let cfg = DesktopServiceConfig {
+            audio_output_source: Some("usb-headset.monitor".into()),
+            ..DesktopServiceConfig::default()
+        };
+        assert_eq!(
+            build_server_config(&cfg).unwrap().audio_output_source.as_deref(),
+            Some("usb-headset.monitor")
+        );
+    }
 
     #[test]
     fn service_snapshot_marks_forced_rollback_on_legacy_pcm16() {

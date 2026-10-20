@@ -27,6 +27,7 @@ Force rollback (overrides data-plane and codec to legacy_las1+pcm16):
 
 Common options:
   --audio-source <system_loopback|windows_loopback|linux_loopback|synthetic>
+  --audio-output-source <PulseAudio monitor source name>
   --data-plane <v2_header|legacy_las1>
   --codec <opus|pcm16>
   --transport <wifi|usb>
